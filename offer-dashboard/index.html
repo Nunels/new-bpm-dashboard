@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Offer Process Designer — Offerte</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="js/vendor/bpmn-js/diagram-js.css">
+  <link rel="stylesheet" href="js/vendor/bpmn-js/bpmn-js.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Offer Process Designer</div>
+    <nav class="tabs">
+      <a href="index.html" class="active">Configurazione offerta</a>
+      <a href="catalog.html">Catalogo prodotti &amp; task</a>
+    </nav>
+    <div class="spacer"></div>
+    <button id="btn-validate">✔ Valida</button>
+    <button id="btn-plan" class="primary">⚙ Execution Plan</button>
+    <button id="btn-export" title="Esporta tutta la configurazione (cataloghi + offerte)">⭳ Esporta</button>
+    <label class="btn" title="Importa una configurazione esportata">⭱ Importa<input type="file" id="file-import" accept=".json,application/json" hidden></label>
+    <button id="btn-reset" class="danger-outline">↺ Reset demo</button>
+  </header>
+
+  <div class="offerbar" id="offerbar"></div>
+
+  <main class="layout">
+    <aside class="palette" id="palette"></aside>
+    <section class="board-wrap">
+      <div class="board-scroll"><div id="board" class="board"></div></div>
+      <div id="simlog" class="simlog"></div>
+    </section>
+    <aside class="panel" id="panel"></aside>
+  </main>
+
+  <script src="js/seed.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/validation.js"></script>
+  <script src="js/simulator.js"></script>
+  <script src="js/exporters/common.js"></script>
+  <script src="js/exporters/dmn.js"></script>
+  <script src="js/exporters/bpmn.js"></script>
+  <script src="js/exporters/cmmn.js"></script>
+  <script src="js/exporters/conductor.js"></script>
+  <script src="js/exporters/serverless.js"></script>
+  <script src="js/exporters/temporal.js"></script>
+  <script src="js/vendor/bpmn-js/bpmn-navigated-viewer.production.min.js"></script>
+  <script src="js/execution-plan.js"></script>
+  <script src="js/offer.js"></script>
+</body>
+</html>
