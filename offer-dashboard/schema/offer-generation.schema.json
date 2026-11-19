@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/offer-process-designer/offer-generation.schema.json",
+  "title": "Risposta dell'agente: configurazione di un'offerta",
+  "description": "Configurazione di un'offerta nel formato della dashboard BPM AI Offer Designer. Gli elenchi ammessi di prodotti, task e step vengono iniettati dal backend a partire dal catalogo.",
+  "type": "object",
+  "required": ["offer", "assumptions"],
+  "additionalProperties": false,
+  "properties": {
+    "offer": {
+      "type": "object",
+      "required": ["id", "name", "products", "blocks", "gates"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,40}$", "description": "Identificativo maiuscolo, es. OFF_CONTO_TIM." },
+        "name": { "type": "string", "minLength": 1, "description": "Nome leggibile dell'offerta." },
+        "description": { "type": "string", "description": "Descrizione breve dell'offerta." },
+        "products": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "description": "Id dei prodotti dell'offerta, presi dal catalogo.",
+          "items": { "type": "string" }
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Attività del processo. Un blocco esegue un task del catalogo in uno step, per uno o più prodotti.",
+          "items": {
+            "type": "object",
+            "required": ["id", "taskId", "stepId", "products", "dependsOn"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^B_[A-Z0-9_]{1,40}$", "description": "Identificativo univoco del blocco, es. B_ORACOLO." },
+              "taskId": { "type": "string", "description": "Id del task nel catalogo." },
+              "stepId": { "type": "string", "description": "Step in cui il blocco viene eseguito." },
+              "products": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" }, "description": "Prodotti per cui il blocco viene eseguito: devono essere nell'offerta e compatibili con il task." },
+              "dependsOn": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "Id di blocchi dello STESSO step che devono concludersi prima. Vuoto = in parallelo." },
+              "config": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Opzionale: se assente si usano i default del catalogo.",
+                "properties": {
+                  "callMode": { "type": "string", "enum": ["perOffer", "perProduct"], "description": "perOffer = una chiamata per tutti i prodotti del blocco; perProduct = una chiamata per prodotto." },
+                  "inputMapping": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Sorgente di ogni input del task: percorso sui dati della pratica (es. cliente.codiceFiscale), esiti.<B_BLOCCO>.<campo> oppure valore fisso." },
+                  "retry": {
+                    "type": "object", "additionalProperties": false,
+                    "properties": { "count": { "type": "integer", "minimum": 0, "maximum": 10 }, "intervalSec": { "type": "integer", "minimum": 0 } }
+                  },
+                  "onKo": { "type": "string", "enum": ["MARK_KO", "IGNORE"], "description": "MARK_KO = il prodotto va in KO (decidono le regole del gate); IGNORE = KO non bloccante." },
+                  "koTask": {
+                    "type": "object", "additionalProperties": false,
+                    "properties": { "enabled": { "type": "boolean" }, "queue": { "type": "string" }, "slaHours": { "type": "integer", "minimum": 0 } },
+                    "description": "Apertura di un task manuale su KO (solo se il task supporta l'esito KO_TASK)."
+                  },
+                  "notify": {
+                    "type": "object", "additionalProperties": false,
+                    "properties": { "onOk": { "type": "boolean" }, "onKo": { "type": "boolean" }, "template": { "type": "string" } }
+                  },
+                  "async": {
+                    "type": "object", "additionalProperties": false,
+                    "properties": { "callbackTopic": { "type": "string" }, "timeoutHours": { "type": "integer", "minimum": 1 } },
+                    "description": "Solo per task asincroni: topic su cui arriva la callback."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "gates": {
+          "type": "array",
+          "description": "Regole di passaggio (barre arancioni) all'uscita di uno step. Senza regole sui KO vale 'Manda solo gli OK'.",
+          "items": {
+            "type": "object",
+            "required": ["id", "afterStep", "rules"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^G_[A-Z0-9_]{1,40}$" },
+              "afterStep": { "type": "string", "description": "Step dopo il quale si applica la barra (non l'ultimo step)." },
+              "note": { "type": "string", "description": "Motivazione, citando il requisito." },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "type": "string", "enum": ["DONT_WAIT", "ONLY_OK", "STOP_ON_KO", "CONTINUE_ON_KO"] },
+                    "blockId": { "type": "string", "description": "Solo per DONT_WAIT: blocco dello stesso step da non attendere." },
+                    "products": { "type": "array", "items": { "type": "string" }, "description": "Solo per STOP_ON_KO: limita la regola a questi prodotti; vuoto = qualsiasi prodotto." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Scelte fatte dove la specifica era ambigua o incompleta, ciascuna con il riferimento al testo. Diventano avvisi per l'analista.",
+      "items": { "type": "string" }
+    }
+  }
+}
