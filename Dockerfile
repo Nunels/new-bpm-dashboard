@@ -25,6 +25,6 @@ USER app
 # Render imposta PORT (default 10000). La chiave del modello va in GEMINI_API_KEY, mai nell'immagine.
 ENV PORT=10000 \
     HOME=/home/app \
-    JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC -Dpolyglot.engine.userResourceCache=/home/app/.cache/polyglot"
+    JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC"
 EXPOSE 10000
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar quarkus-run.jar"]
