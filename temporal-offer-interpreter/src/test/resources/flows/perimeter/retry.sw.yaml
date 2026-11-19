@@ -1,0 +1,30 @@
+document:
+  dsl: "1.0.0"
+  namespace: test
+  name: retry
+  version: "1.0.0"
+  summary: try/catch con retry su errore di comunicazione
+do:
+  - check:
+      try:
+        - invoke:
+            call: http
+            with:
+              method: post
+              endpoint:
+                uri: http://localhost:8089/mock/oracolo/v1/check
+              body:
+                products:
+                  - CONTO
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        retry:
+          delay:
+            milliseconds: 200
+          backoff:
+            constant: {}
+          limit:
+            attempt:
+              count: 2

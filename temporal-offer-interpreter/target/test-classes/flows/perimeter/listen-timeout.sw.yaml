@@ -1,0 +1,16 @@
+document:
+  dsl: "1.0.0"
+  namespace: test
+  name: listen-timeout
+  version: "1.0.0"
+  summary: callback mai arrivata entro il timeout
+do:
+  - await-callback:
+      listen:
+        to:
+          one:
+            with:
+              type: callback.never.sent
+      timeout:
+        after:
+          milliseconds: 500

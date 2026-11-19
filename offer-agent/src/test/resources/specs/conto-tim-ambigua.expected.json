@@ -1,0 +1,22 @@
+{
+  "offer": {
+    "id": "OFF_CONTO_TIM",
+    "name": "Conto + TIM",
+    "description": "Conto venduto insieme all'offerta TIM",
+    "products": ["CONTO", "TIM"],
+    "blocks": [
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ORACOLO_2", "taskId": "ORACOLO_2", "stepId": "PRELIMINARI", "products": ["TIM"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE_TIM", "taskId": "ATTIVAZIONE_TIM", "stepId": "ATTIVAZIONI", "products": ["TIM"], "dependsOn": [] }
+    ],
+    "gates": [
+      { "id": "G_PRELIMINARI", "afterStep": "PRELIMINARI", "note": "Il partner TIM risponde in ritardo: non vogliamo aspettarlo.", "rules": [{ "type": "DONT_WAIT", "blockId": "B_ORACOLO_2" }] }
+    ]
+  },
+  "assumptions": [
+    "\"Fate i controlli antifrode\": interpretato come Oracolo per Conto e Oracolo 2 (verifiche partner) per TIM.",
+    "\"Non vogliamo aspettarlo\": applicato al controllo Oracolo 2 di TIM nelle verifiche preliminari, non all'attivazione TIM.",
+    "Nessuna regola sui KO indicata: vale il default \"Manda solo gli OK\" a ogni passaggio."
+  ]
+}

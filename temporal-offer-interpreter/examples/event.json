@@ -1,0 +1,7 @@
+{
+  "specversion": "1.0",
+  "id": "evt-1",
+  "source": "ticketing",
+  "type": "ticket.esito",
+  "data": { "praticaId": "PRA-42", "esito": "OK", "operatore": "mrossi" }
+}

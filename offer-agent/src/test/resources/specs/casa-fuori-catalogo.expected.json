@@ -1,0 +1,17 @@
+{
+  "offer": {
+    "id": "OFF_CASA",
+    "name": "Casa: Mutuo + Conto",
+    "description": "Solo la parte Conto: il mutuo non è nel catalogo",
+    "products": ["CONTO"],
+    "blocks": [
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] }
+    ],
+    "gates": []
+  },
+  "assumptions": [
+    "Il prodotto \"Mutuo prima casa\" non è nel catalogo: escluso dall'offerta.",
+    "La perizia dell'immobile e la delibera del comitato crediti non corrispondono a nessun task del catalogo: non configurate."
+  ]
+}

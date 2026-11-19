@@ -1,0 +1,168 @@
+document:
+  dsl: "1.0.0"
+  namespace: offers
+  name: offer-off-sim-mono
+  version: "1.0.0"
+  title: "Prova: solo Conto (Solo OK)"
+  summary: "Mono-prodotto: se l'unico prodotto va KO nessun prodotto supera il gate — generato da Offer Process Designer"
+input:
+  schema:
+    format: json
+    document:
+      type: object
+      required:
+        - pratica
+        - cliente
+      properties:
+        pratica:
+          type: object
+        cliente:
+          type: object
+do:
+  - init-offer:
+      set:
+        activeProducts:
+          - CONTO
+        koProducts: []
+        esiti: {}
+      export:
+        as: ${ $output }
+  - step-preliminari:
+      do:
+        - b-m-oracolo:
+            do:
+              - b-m-oracolo-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/oracolo/v1/check
+                          body:
+                            codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                            documento: ${ $workflow.input.cliente.documento.numero }
+                            prodotti: ${ $workflow.input.offerta.prodotti }
+                            products: ${ [$context.activeProducts[] | select((. == "CONTO"))] }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_M_ORACOLO\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_M_ORACOLO\": ((($context.koByBlock[\"B_M_ORACOLO\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 30
+                      limit:
+                        attempt:
+                          count: 3
+            metadata:
+              activityId: B_M_ORACOLO
+              taskId: ORACOLO
+              products: CONTO
+              invocation: SINGLE_CALL_FOR_N_PRODUCTS
+      metadata:
+        step: Verifiche Preliminari
+  - gate-preliminari:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK
+  - gate-preliminari-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - gate-verticali:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+  - gate-verticali-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - gate-bo:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+  - gate-bo-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - step-attivazioni:
+      do:
+        - b-m-att:
+            for:
+              each: product
+              in: ${ [$context.activeProducts[] | select((. == "CONTO"))] }
+            do:
+              - b-m-att-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/corebanking/v1/attivazioni
+                          body:
+                            idPratica: ${ $workflow.input.pratica.id }
+                            codiceProdotto: ${ $workflow.input.prodotto.id }
+                            products: ${ [$product] }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_M_ATT\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_M_ATT\": ((($context.koByBlock[\"B_M_ATT\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 60
+                      limit:
+                        attempt:
+                          count: 3
+            metadata:
+              activityId: B_M_ATT
+              taskId: ATTIVAZIONE_BANCARIA
+              products: CONTO
+              invocation: ONE_CALL_PER_PRODUCT
+      metadata:
+        step: Attivazioni
+  - gate-attivazioni:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+  - gate-attivazioni-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - offer-completed:
+      set:
+        status: COMPLETED
+        activeProducts: ${ $context.activeProducts }
+      then: end
+  - offer-no-products:
+      set:
+        status: NO_PRODUCTS
+      then: end

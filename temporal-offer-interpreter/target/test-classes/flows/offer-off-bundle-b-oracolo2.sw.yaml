@@ -1,0 +1,75 @@
+document:
+  dsl: "1.0.0"
+  namespace: offers
+  name: offer-off-bundle-b-oracolo2
+  version: "1.0.0"
+  title: Oracolo 2 (non atteso)
+  summary: Eseguito senza attesa dal gate dopo Verifiche Preliminari
+do:
+  - init-branch:
+      set:
+        activeProducts: ${ $workflow.input.activeProducts }
+        koProducts: []
+        esiti: {}
+      export:
+        as: ${ $output }
+  - b-oracolo2:
+      for:
+        each: product
+        in: ${ [$context.activeProducts[] | select((. == "TIM"))] }
+      do:
+        - b-oracolo2-call:
+            try:
+              - invoke:
+                  call: http
+                  with:
+                    method: post
+                    endpoint:
+                      uri: https://api.example.internal/partner/tim/v1/oracolo
+                    body:
+                      codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                      msisdn: ${ $workflow.input.prodotti.TIM.msisdn }
+                      products: ${ [$product] }
+                  export:
+                    as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ORACOLO2\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ORACOLO2\": ((($context.koByBlock[\"B_ORACOLO2\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+            catch:
+              errors:
+                with:
+                  type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              retry:
+                delay:
+                  seconds: 60
+                limit:
+                  attempt:
+                    count: 2
+      metadata:
+        activityId: B_ORACOLO2
+        taskId: ORACOLO_2
+        products: TIM
+        invocation: ONE_CALL_PER_PRODUCT
+        block:
+          id: B_ORACOLO2
+          taskId: ORACOLO_2
+          stepId: PRELIMINARI
+          products:
+            - TIM
+          dependsOn: []
+          config:
+            callMode: perProduct
+            inputMapping:
+              codiceFiscale: cliente.codiceFiscale
+              msisdn: prodotti.TIM.msisdn
+            retry:
+              intervalSec: 60
+            onKo: MARK_KO
+            koTask:
+              enabled: false
+              queue: ""
+              slaHours: 24
+            notify:
+              onOk: false
+              onKo: false
+              template: ""
+            async:
+              callbackTopic: ""
+              timeoutHours: 48

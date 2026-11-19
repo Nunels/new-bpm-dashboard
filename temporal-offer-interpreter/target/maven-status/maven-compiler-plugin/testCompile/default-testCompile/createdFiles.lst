@@ -1,0 +1,10 @@
+it\sim\temporal\ConformanceTest.class
+it\sim\temporal\MockServices$Call.class
+it\sim\temporal\ScenarioTest.class
+it\sim\temporal\BundleCallbackTest.class
+it\sim\temporal\TestFlows.class
+it\sim\temporal\PublicationTest.class
+it\sim\temporal\JqExpressionEngineTest.class
+it\sim\temporal\InterpreterTestSupport.class
+it\sim\temporal\PerimeterTest.class
+it\sim\temporal\MockServices.class

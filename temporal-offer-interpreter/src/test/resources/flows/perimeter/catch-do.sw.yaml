@@ -1,0 +1,28 @@
+document:
+  dsl: "1.0.0"
+  namespace: test
+  name: catch-do
+  version: "1.0.0"
+  summary: errore catturato e gestito con catch.do ($error)
+do:
+  - check:
+      try:
+        - invoke:
+            call: http
+            with:
+              method: post
+              endpoint:
+                uri: http://localhost:8089/mock/oracolo/v1/check
+              body:
+                products:
+                  - CONTO
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: problem
+        do:
+          - fallback:
+              set:
+                degraded: true
+                status: ${ $problem.status }

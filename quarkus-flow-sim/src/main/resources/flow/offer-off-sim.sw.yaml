@@ -1,0 +1,370 @@
+document:
+  dsl: "1.0.0"
+  namespace: offers
+  name: offer-off-sim
+  version: "1.0.0"
+  title: "Prova: Conto + Evo + Lib Min + TIM (solo sincroni)"
+  summary: Copre Non attendere, Solo OK, Ferma tutto, Prosegui anche con KO, parallelo, sequenza, 1 chiamata per N e per prodotto — generato da Offer Process Designer
+input:
+  schema:
+    format: json
+    document:
+      type: object
+      required:
+        - pratica
+        - cliente
+      properties:
+        pratica:
+          type: object
+        cliente:
+          type: object
+do:
+  - init-offer:
+      set:
+        activeProducts:
+          - CONTO
+          - EVO
+          - LIBMIN
+          - TIM
+        koProducts: []
+        esiti: {}
+      export:
+        as: ${ $output }
+  - step-preliminari:
+      do:
+        - start-b-oracolo2:
+            run:
+              workflow:
+                namespace: offers
+                name: offer-off-sim-b-oracolo2
+                version: "1.0.0"
+                input:
+                  activeProducts: ${ $context.activeProducts }
+                  pratica: ${ $workflow.input.pratica }
+                  cliente: ${ $workflow.input.cliente }
+                  prodotti: ${ $workflow.input.prodotti }
+              await: false
+        - b-oracolo:
+            do:
+              - b-oracolo-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/oracolo/v1/check
+                          body:
+                            codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                            documento: ${ $workflow.input.cliente.documento.numero }
+                            prodotti: ${ $workflow.input.offerta.prodotti }
+                            products: ${ [$context.activeProducts[] | select((. == "CONTO" or . == "EVO" or . == "LIBMIN"))] }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ORACOLO\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ORACOLO\": ((($context.koByBlock[\"B_ORACOLO\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 30
+                      limit:
+                        attempt:
+                          count: 3
+            metadata:
+              activityId: B_ORACOLO
+              taskId: ORACOLO
+              products: CONTO,EVO,LIBMIN
+              invocation: SINGLE_CALL_FOR_N_PRODUCTS
+        - b-pregiudizievoli:
+            do:
+              - b-pregiudizievoli-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/pregiudizievoli/v1/check
+                          body:
+                            codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                            scoreRischio: ${ $context.esiti.B_ORACOLO.scoreRischio }
+                            products: ${ ([$context.activeProducts[] | select((. == "CONTO" or . == "EVO" or . == "LIBMIN"))] - (($context.koByBlock["B_ORACOLO"] // []))) }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_PREGIUDIZIEVOLI\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_PREGIUDIZIEVOLI\": ((($context.koByBlock[\"B_PREGIUDIZIEVOLI\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 30
+                      limit:
+                        attempt:
+                          count: 2
+            metadata:
+              activityId: B_PREGIUDIZIEVOLI
+              taskId: PREGIUDIZIEVOLI
+              products: CONTO,EVO,LIBMIN
+              invocation: SINGLE_CALL_FOR_N_PRODUCTS
+      metadata:
+        step: Verifiche Preliminari
+  - gate-preliminari:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: "Non attendere: Oracolo 2 [TIM] · Proseguono solo i prodotti OK"
+  - gate-preliminari-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - step-verticali:
+      do:
+        - b-cribis:
+            for:
+              each: product
+              in: ${ [$context.activeProducts[] | select((. == "CONTO"))] }
+            do:
+              - b-cribis-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: get
+                          endpoint:
+                            uri: ${ "http://localhost:8089/mock/cribis/v1/rating/" + (($workflow.input.cliente.codiceFiscale) | tostring | @uri) + "" }
+                          query:
+                            products: ${ $product }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_CRIBIS\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_CRIBIS\": ((($context.koByBlock[\"B_CRIBIS\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 30
+                      limit:
+                        attempt:
+                          count: 2
+            metadata:
+              activityId: B_CRIBIS
+              taskId: CRIBIS
+              products: CONTO
+              invocation: ONE_CALL_PER_PRODUCT
+      metadata:
+        step: Verifiche Verticali
+  - gate-verticali:
+      switch:
+        - stop:
+            when: ${ ($context.koProducts | length) > 0 }
+            then: offer-stopped
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Ferma tutta l'offerta se c'è almeno un KO · Proseguono solo i prodotti OK
+  - gate-verticali-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - step-bo:
+      do:
+        - b-stampa:
+            for:
+              each: product
+              in: ${ [$context.activeProducts[] | select((. == "CONTO" or . == "EVO" or . == "LIBMIN"))] }
+            do:
+              - b-stampa-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/contratti/v1/stampa
+                          body:
+                            idPratica: ${ $workflow.input.pratica.id }
+                            codiceProdotto: ${ $workflow.input.prodotto.id }
+                            products: ${ [$product] }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_STAMPA\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_STAMPA\": ((($context.koByBlock[\"B_STAMPA\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 10
+                      limit:
+                        attempt:
+                          count: 3
+            metadata:
+              activityId: B_STAMPA
+              taskId: STAMPA_CONTRATTI
+              products: CONTO,EVO,LIBMIN
+              invocation: ONE_CALL_PER_PRODUCT
+      metadata:
+        step: Verifiche BO
+  - gate-bo:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+  - gate-bo-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - step-attivazioni:
+      do:
+        - attivazioni-stage-1:
+            fork:
+              branches:
+                - b-att-banca:
+                    for:
+                      each: product
+                      in: ${ [$context.activeProducts[] | select((. == "CONTO" or . == "EVO" or . == "LIBMIN"))] }
+                    do:
+                      - b-att-banca-call:
+                          try:
+                            - invoke:
+                                call: http
+                                with:
+                                  method: post
+                                  endpoint:
+                                    uri: http://localhost:8089/mock/corebanking/v1/attivazioni
+                                  body:
+                                    idPratica: ${ $workflow.input.pratica.id }
+                                    codiceProdotto: ${ $workflow.input.prodotto.id }
+                                    products: ${ [$product] }
+                                export:
+                                  as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ATT_BANCA\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ATT_BANCA\": ((($context.koByBlock[\"B_ATT_BANCA\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                          catch:
+                            errors:
+                              with:
+                                type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                            retry:
+                              delay:
+                                seconds: 60
+                              limit:
+                                attempt:
+                                  count: 3
+                    metadata:
+                      activityId: B_ATT_BANCA
+                      taskId: ATTIVAZIONE_BANCARIA
+                      products: CONTO,EVO,LIBMIN
+                      invocation: ONE_CALL_PER_PRODUCT
+                - b-stampa-tim:
+                    for:
+                      each: product
+                      in: ${ [$context.activeProducts[] | select((. == "TIM"))] }
+                    do:
+                      - b-stampa-tim-call:
+                          try:
+                            - invoke:
+                                call: http
+                                with:
+                                  method: post
+                                  endpoint:
+                                    uri: http://localhost:8089/mock/contratti/v1/stampa
+                                  body:
+                                    idPratica: ${ $workflow.input.pratica.id }
+                                    codiceProdotto: ${ $workflow.input.prodotto.id }
+                                    products: ${ [$product] }
+                                export:
+                                  as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_STAMPA_TIM\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_STAMPA_TIM\": ((($context.koByBlock[\"B_STAMPA_TIM\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                          catch:
+                            errors:
+                              with:
+                                type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                            retry:
+                              delay:
+                                seconds: 10
+                              limit:
+                                attempt:
+                                  count: 3
+                    metadata:
+                      activityId: B_STAMPA_TIM
+                      taskId: STAMPA_CONTRATTI
+                      products: TIM
+                      invocation: ONE_CALL_PER_PRODUCT
+              compete: false
+      metadata:
+        step: Attivazioni
+  - gate-attivazioni:
+      switch:
+        - no-products:
+            when: ${ ($context.activeProducts | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · I prodotti KO proseguono comunque
+  - gate-attivazioni-apply:
+      set:
+        activeProducts: ${ $context.activeProducts }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - step-post-attivazioni:
+      do:
+        - b-comunicazioni:
+            do:
+              - b-comunicazioni-call:
+                  try:
+                    - invoke:
+                        call: http
+                        with:
+                          method: post
+                          endpoint:
+                            uri: http://localhost:8089/mock/comunicazioni/v1/invio
+                          body:
+                            email: ${ $workflow.input.cliente.email }
+                            template: null
+                            products: ${ [$context.activeProducts[] | select((. == "CONTO" or . == "EVO" or . == "LIBMIN" or . == "TIM"))] }
+                        export:
+                          as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_COMUNICAZIONI\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_COMUNICAZIONI\": ((($context.koByBlock[\"B_COMUNICAZIONI\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 60
+                      limit:
+                        attempt:
+                          count: 3
+            metadata:
+              activityId: B_COMUNICAZIONI
+              taskId: COMUNICAZIONI
+              products: CONTO,EVO,LIBMIN,TIM
+              invocation: SINGLE_CALL_FOR_N_PRODUCTS
+      metadata:
+        step: Post Attivazioni
+  - offer-completed:
+      set:
+        status: COMPLETED
+        activeProducts: ${ $context.activeProducts }
+      then: end
+  - offer-no-products:
+      set:
+        status: NO_PRODUCTS
+      then: end
+  - offer-stopped:
+      raise:
+        error:
+          type: https://example.com/errors/offer-stopped
+          status: 409
+          title: Offerta fermata da una barra regole (KO)

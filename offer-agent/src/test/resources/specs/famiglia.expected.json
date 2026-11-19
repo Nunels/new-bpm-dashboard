@@ -1,0 +1,22 @@
+{
+  "offer": {
+    "id": "OFF_FAMIGLIA",
+    "name": "Famiglia: Evo + Libretto Minori",
+    "description": "Evo e Lib Min con presa in carico back office",
+    "products": ["EVO", "LIBMIN"],
+    "blocks": [
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["EVO", "LIBMIN"], "dependsOn": [], "config": { "callMode": "perOffer" } },
+      { "id": "B_PREGIUDIZIEVOLI", "taskId": "PREGIUDIZIEVOLI", "stepId": "PRELIMINARI", "products": ["EVO", "LIBMIN"], "dependsOn": ["B_ORACOLO"] },
+      { "id": "B_BO", "taskId": "PRESA_IN_CARICO_BO", "stepId": "BO", "products": ["EVO", "LIBMIN"], "dependsOn": [],
+        "config": { "async": { "callbackTopic": "bo.pratiche.esiti" }, "koTask": { "enabled": true, "queue": "BO_RILAVORAZIONE", "slaHours": 8 } } },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["EVO", "LIBMIN"], "dependsOn": [],
+        "config": { "callMode": "perProduct", "retry": { "count": 3, "intervalSec": 60 } } },
+      { "id": "B_BENVENUTO", "taskId": "COMUNICAZIONI", "stepId": "POST_ATTIVAZIONI", "products": ["EVO", "LIBMIN"], "dependsOn": [],
+        "config": { "inputMapping": { "email": "cliente.email", "template": "WELCOME_KIT" } } }
+    ],
+    "gates": [
+      { "id": "G_BO", "afterStep": "BO", "note": "Se dopo il back office c'è anche un solo KO, l'offerta si ferma.", "rules": [{ "type": "STOP_ON_KO", "products": [] }] }
+    ]
+  },
+  "assumptions": []
+}

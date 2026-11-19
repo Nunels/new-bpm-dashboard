@@ -1,0 +1,369 @@
+{
+  "planVersion": "1.0",
+  "generatedAt": "2026-11-17T17:49:44.186Z",
+  "offer": {
+    "id": "OFF_SIM_MONO",
+    "name": "Prova: solo Conto (Solo OK)",
+    "description": "Mono-prodotto: se l'unico prodotto va KO nessun prodotto supera il gate"
+  },
+  "products": [
+    {
+      "id": "CONTO",
+      "name": "Conto",
+      "category": "Banking"
+    }
+  ],
+  "summary": {
+    "products": 1,
+    "activities": 2,
+    "services": 2,
+    "gates": 1,
+    "valid": true
+  },
+  "steps": [
+    {
+      "order": 1,
+      "stepId": "PRELIMINARI",
+      "name": "Verifiche Preliminari",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_M_ORACOLO",
+              "taskId": "ORACOLO",
+              "taskName": "Oracolo",
+              "service": {
+                "method": "POST",
+                "path": "/oracolo/v1/check"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "SINGLE_CALL_FOR_N_PRODUCTS",
+                "calls": 1
+              },
+              "products": [
+                "CONTO"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "codiceFiscale",
+                  "required": true,
+                  "source": "cliente.codiceFiscale"
+                },
+                {
+                  "name": "documento",
+                  "required": true,
+                  "source": "cliente.documento.numero"
+                },
+                {
+                  "name": "prodotti",
+                  "required": true,
+                  "source": "offerta.prodotti"
+                }
+              ],
+              "output": [
+                {
+                  "name": "esitoOracolo",
+                  "target": "esiti.B_M_ORACOLO.esitoOracolo"
+                },
+                {
+                  "name": "scoreRischio",
+                  "target": "esiti.B_M_ORACOLO.scoreRischio"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 30
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              },
+              "extensionPoints": {
+                "pluggableRequest": true,
+                "pluggableKo": true
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "VERTICALI",
+        "gates": [
+          {
+            "gateId": "G_M_PRE",
+            "rules": [
+              {
+                "type": "ONLY_OK"
+              }
+            ]
+          }
+        ],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_M_ORACOLO"
+          ],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Proseguono solo i prodotti OK"
+          ]
+        }
+      }
+    },
+    {
+      "order": 2,
+      "stepId": "VERTICALI",
+      "name": "Verifiche Verticali",
+      "stages": [],
+      "exitGate": {
+        "to": "BO",
+        "gates": [],
+        "effectivePolicy": {
+          "waitFor": [],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Proseguono solo i prodotti OK (default)"
+          ]
+        }
+      }
+    },
+    {
+      "order": 3,
+      "stepId": "BO",
+      "name": "Verifiche BO",
+      "stages": [],
+      "exitGate": {
+        "to": "ATTIVAZIONI",
+        "gates": [],
+        "effectivePolicy": {
+          "waitFor": [],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Proseguono solo i prodotti OK (default)"
+          ]
+        }
+      }
+    },
+    {
+      "order": 4,
+      "stepId": "ATTIVAZIONI",
+      "name": "Attivazioni",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_M_ATT",
+              "taskId": "ATTIVAZIONE_BANCARIA",
+              "taskName": "Attivazione prodotto bancario",
+              "service": {
+                "method": "POST",
+                "path": "/corebanking/v1/attivazioni"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 1
+              },
+              "products": [
+                "CONTO"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "idPratica",
+                  "required": true,
+                  "source": "pratica.id"
+                },
+                {
+                  "name": "codiceProdotto",
+                  "required": true,
+                  "source": "prodotto.id"
+                }
+              ],
+              "output": [
+                {
+                  "name": "idRapporto",
+                  "target": "esiti.B_M_ATT.idRapporto"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 60
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "POST_ATTIVAZIONI",
+        "gates": [],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_M_ATT"
+          ],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Proseguono solo i prodotti OK (default)"
+          ]
+        }
+      }
+    },
+    {
+      "order": 5,
+      "stepId": "POST_ATTIVAZIONI",
+      "name": "Post Attivazioni",
+      "stages": []
+    }
+  ],
+  "servicesToDevelop": [
+    {
+      "taskId": "ORACOLO",
+      "name": "Oracolo",
+      "description": "Verifiche antifrode/antiriciclaggio sul cliente. Una chiamata per N prodotti.",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/oracolo/v1/check"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "inputs": [
+        {
+          "name": "codiceFiscale",
+          "required": true
+        },
+        {
+          "name": "documento",
+          "required": true
+        },
+        {
+          "name": "prodotti",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "esitoOracolo",
+          "description": "OK/KO per prodotto"
+        },
+        {
+          "name": "scoreRischio",
+          "description": "0-100"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO",
+        "KO_TASK"
+      ],
+      "extensionPoints": {
+        "pluggableRequest": true,
+        "pluggableKo": true
+      },
+      "usedIn": [
+        {
+          "step": "PRELIMINARI",
+          "activityId": "B_M_ORACOLO",
+          "products": [
+            "CONTO"
+          ],
+          "invocation": "SINGLE_CALL_FOR_N_PRODUCTS"
+        }
+      ]
+    },
+    {
+      "taskId": "ATTIVAZIONE_BANCARIA",
+      "name": "Attivazione prodotto bancario",
+      "description": "Attivazione su core banking",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/corebanking/v1/attivazioni"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "inputs": [
+        {
+          "name": "idPratica",
+          "required": true
+        },
+        {
+          "name": "codiceProdotto",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "idRapporto",
+          "description": "Id rapporto attivato"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO",
+        "KO_TASK"
+      ],
+      "extensionPoints": null,
+      "usedIn": [
+        {
+          "step": "ATTIVAZIONI",
+          "activityId": "B_M_ATT",
+          "products": [
+            "CONTO"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "errors": [],
+    "warnings": [],
+    "infos": [
+      "Transizione Verifiche Verticali → Verifiche BO: nessuna regola sui KO, si applica il default \"Manda solo gli OK\".",
+      "Transizione Verifiche BO → Attivazioni: nessuna regola sui KO, si applica il default \"Manda solo gli OK\".",
+      "Transizione Attivazioni → Post Attivazioni: nessuna regola sui KO, si applica il default \"Manda solo gli OK\"."
+    ]
+  }
+}

@@ -1,0 +1,676 @@
+[
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "tutto-ok",
+    "mock": {},
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Evo, Lib Min, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 4,
+      "ATTIVAZIONE_BANCARIA": 3,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-tutto-ok"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "evo-ko-in-oracolo",
+    "mock": {
+      "ORACOLO": {
+        "EVO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Lib Min, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 3,
+      "ATTIVAZIONE_BANCARIA": 2,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-evo-ko-in-oracolo"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "conto-ed-evo-ko-in-oracolo",
+    "mock": {
+      "ORACOLO": {
+        "CONTO": "KO",
+        "EVO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Lib Min, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 0,
+      "STAMPA_CONTRATTI": 2,
+      "ATTIVAZIONE_BANCARIA": 1,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [],
+      "STAMPA_CONTRATTI": [
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-conto-ed-evo-ko-in-oracolo"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "cribis-ko-ferma-tutto",
+    "mock": {
+      "CRIBIS": {
+        "CONTO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "STOPPED",
+      "activeProducts": [],
+      "message": "Offerta fermata al gate Verifiche Verticali → Verifiche BO per KO su Conto"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 0,
+      "ATTIVAZIONE_BANCARIA": 0,
+      "COMUNICAZIONI": 0
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [],
+      "ATTIVAZIONE_BANCARIA": [],
+      "COMUNICAZIONI": []
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-cribis-ko-ferma-tutto"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "pregiudizievoli-ko-libmin",
+    "mock": {
+      "PREGIUDIZIEVOLI": {
+        "LIBMIN": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "EVO",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Evo, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 3,
+      "ATTIVAZIONE_BANCARIA": 2,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "EVO",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "EVO"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "EVO",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-pregiudizievoli-ko-libmin"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "stampa-ko-in-bo-esclude-evo",
+    "mock": {
+      "STAMPA_CONTRATTI": {
+        "EVO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Lib Min, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 4,
+      "ATTIVAZIONE_BANCARIA": 2,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-stampa-ko-in-bo-esclude-evo"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "attivazione-ko-prosegue",
+    "mock": {
+      "ATTIVAZIONE_BANCARIA": {
+        "CONTO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Evo, Lib Min, TIM"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 4,
+      "ATTIVAZIONE_BANCARIA": 3,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-attivazione-ko-prosegue"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM",
+    "workflow": "offers:offer-off-sim",
+    "name": "oracolo2-lento-non-attendere",
+    "mock": {},
+    "latency": {
+      "ORACOLO_2": 4000
+    },
+    "maxMillis": 3000,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "message": "Completati: Conto, Evo, Lib Min, TIM — restano esiti asincroni da ricevere per: TIM (Verifiche Preliminari)"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "PREGIUDIZIEVOLI": 1,
+      "ORACOLO_2": 1,
+      "CRIBIS": 1,
+      "STAMPA_CONTRATTI": 4,
+      "ATTIVAZIONE_BANCARIA": 3,
+      "COMUNICAZIONI": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "PREGIUDIZIEVOLI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "ORACOLO_2": [
+        "TIM"
+      ],
+      "CRIBIS": [
+        "CONTO"
+      ],
+      "STAMPA_CONTRATTI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "COMUNICAZIONI": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM-oracolo2-lento-non-attendere"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM_MONO",
+    "workflow": "offers:offer-off-sim-mono",
+    "name": "tutto-ok",
+    "mock": {},
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "COMPLETED",
+      "activeProducts": [
+        "CONTO"
+      ],
+      "message": "Completati: Conto"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "ATTIVAZIONE_BANCARIA": 1
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO"
+      ],
+      "ATTIVAZIONE_BANCARIA": [
+        "CONTO"
+      ]
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM_MONO-tutto-ok"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  },
+  {
+    "offerId": "OFF_SIM_MONO",
+    "workflow": "offers:offer-off-sim-mono",
+    "name": "oracolo-ko-nessun-prodotto",
+    "mock": {
+      "ORACOLO": {
+        "CONTO": "KO"
+      }
+    },
+    "latency": {},
+    "maxMillis": null,
+    "expected": {
+      "status": "NO_PRODUCTS",
+      "activeProducts": [],
+      "message": "Nessun prodotto supera il gate Verifiche Preliminari → Verifiche Verticali"
+    },
+    "expectedCalls": {
+      "ORACOLO": 1,
+      "ATTIVAZIONE_BANCARIA": 0
+    },
+    "expectedProducts": {
+      "ORACOLO": [
+        "CONTO"
+      ],
+      "ATTIVAZIONE_BANCARIA": []
+    },
+    "input": {
+      "pratica": {
+        "id": "PRA-OFF_SIM_MONO-oracolo-ko-nessun-prodotto"
+      },
+      "cliente": {
+        "codiceFiscale": "RSSMRA80A01H501U",
+        "email": "mario.rossi@example.com",
+        "documento": {
+          "tipo": "CI",
+          "numero": "AX1234567",
+          "scadenza": "2030-01-01"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "offer": {
+    "id": "OFF_CONTO_ONLINE",
+    "name": "Conto Online",
+    "description": "Conto corrente online",
+    "products": ["CONTO"],
+    "blocks": [
+      { "id": "B_VERIFICA_DOCUMENTO", "taskId": "VERIFICA_DOCUMENTO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": ["B_VERIFICA_DOCUMENTO"] },
+      { "id": "B_CRIBIS", "taskId": "CRIBIS", "stepId": "VERTICALI", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] }
+    ],
+    "gates": [
+      { "id": "G_PRELIMINARI", "afterStep": "PRELIMINARI", "note": "Se una qualsiasi verifica preliminare dà esito negativo, la pratica si ferma.", "rules": [{ "type": "STOP_ON_KO", "products": [] }] }
+    ]
+  },
+  "assumptions": []
+}

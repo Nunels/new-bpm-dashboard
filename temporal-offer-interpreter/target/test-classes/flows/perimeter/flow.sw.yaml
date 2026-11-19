@@ -1,0 +1,46 @@
+document:
+  dsl: "1.0.0"
+  namespace: test
+  name: flow
+  version: "1.0.0"
+  summary: for con at/while, switch con salto a un task, then end
+do:
+  - init:
+      set:
+        items: [1, 2, 3, 4]
+        sum: 0
+        seen: []
+      export:
+        as: ${ $output }
+  - loop:
+      for:
+        each: n
+        in: ${ $context.items }
+        at: i
+      while: ${ $n < 4 }
+      do:
+        - add:
+            set:
+              sum: ${ $context.sum + $n }
+              seen: ${ $context.seen + [$i] }
+            export:
+              as: ${ $context + $output }
+  - check:
+      switch:
+        - big:
+            when: ${ $context.sum > 5 }
+            then: done
+        - small:
+            then: continue
+  - never:
+      raise:
+        error:
+          type: https://example.com/errors/never
+          status: 500
+  - done:
+      set:
+        sum: ${ $context.sum }
+        seen: ${ $context.seen }
+        workflow: ${ $workflow.id }
+        task: ${ $task.reference }
+      then: end

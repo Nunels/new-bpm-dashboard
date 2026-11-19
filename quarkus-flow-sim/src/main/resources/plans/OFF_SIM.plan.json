@@ -1,0 +1,1018 @@
+{
+  "planVersion": "1.0",
+  "generatedAt": "2026-11-17T17:49:44.165Z",
+  "offer": {
+    "id": "OFF_SIM",
+    "name": "Prova: Conto + Evo + Lib Min + TIM (solo sincroni)",
+    "description": "Copre Non attendere, Solo OK, Ferma tutto, Prosegui anche con KO, parallelo, sequenza, 1 chiamata per N e per prodotto"
+  },
+  "products": [
+    {
+      "id": "CONTO",
+      "name": "Conto",
+      "category": "Banking"
+    },
+    {
+      "id": "EVO",
+      "name": "Evo",
+      "category": "Banking"
+    },
+    {
+      "id": "LIBMIN",
+      "name": "Lib Min",
+      "category": "Banking"
+    },
+    {
+      "id": "TIM",
+      "name": "TIM",
+      "category": "Telco"
+    }
+  ],
+  "summary": {
+    "products": 4,
+    "activities": 8,
+    "services": 7,
+    "gates": 4,
+    "valid": true
+  },
+  "steps": [
+    {
+      "order": 1,
+      "stepId": "PRELIMINARI",
+      "name": "Verifiche Preliminari",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "PARALLEL",
+          "activities": [
+            {
+              "activityId": "B_ORACOLO",
+              "taskId": "ORACOLO",
+              "taskName": "Oracolo",
+              "service": {
+                "method": "POST",
+                "path": "/oracolo/v1/check"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "SINGLE_CALL_FOR_N_PRODUCTS",
+                "calls": 1
+              },
+              "products": [
+                "CONTO",
+                "EVO",
+                "LIBMIN"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "codiceFiscale",
+                  "required": true,
+                  "source": "cliente.codiceFiscale"
+                },
+                {
+                  "name": "documento",
+                  "required": true,
+                  "source": "cliente.documento.numero"
+                },
+                {
+                  "name": "prodotti",
+                  "required": true,
+                  "source": "offerta.prodotti"
+                }
+              ],
+              "output": [
+                {
+                  "name": "esitoOracolo",
+                  "target": "esiti.B_ORACOLO.esitoOracolo"
+                },
+                {
+                  "name": "scoreRischio",
+                  "target": "esiti.B_ORACOLO.scoreRischio"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 30
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              },
+              "extensionPoints": {
+                "pluggableRequest": true,
+                "pluggableKo": true
+              }
+            },
+            {
+              "activityId": "B_ORACOLO2",
+              "taskId": "ORACOLO_2",
+              "taskName": "Oracolo 2",
+              "service": {
+                "method": "POST",
+                "path": "/partner/tim/v1/oracolo"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 1
+              },
+              "products": [
+                "TIM"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "codiceFiscale",
+                  "required": true,
+                  "source": "cliente.codiceFiscale"
+                },
+                {
+                  "name": "msisdn",
+                  "required": false,
+                  "source": "prodotti.TIM.msisdn"
+                }
+              ],
+              "output": [
+                {
+                  "name": "esitoOracolo2",
+                  "target": "esiti.B_ORACOLO2.esitoOracolo2"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 2,
+                "intervalSec": 60
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            }
+          ]
+        },
+        {
+          "stage": 2,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_PREGIUDIZIEVOLI",
+              "taskId": "PREGIUDIZIEVOLI",
+              "taskName": "Pregiudizievoli",
+              "service": {
+                "method": "POST",
+                "path": "/pregiudizievoli/v1/check"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "SINGLE_CALL_FOR_N_PRODUCTS",
+                "calls": 1
+              },
+              "products": [
+                "CONTO",
+                "EVO",
+                "LIBMIN"
+              ],
+              "dependsOn": [
+                "B_ORACOLO"
+              ],
+              "input": [
+                {
+                  "name": "codiceFiscale",
+                  "required": true,
+                  "source": "cliente.codiceFiscale"
+                },
+                {
+                  "name": "scoreRischio",
+                  "required": false,
+                  "source": "esiti.ORACOLO.scoreRischio"
+                }
+              ],
+              "output": [
+                {
+                  "name": "presenzaPregiudizievoli",
+                  "target": "esiti.B_PREGIUDIZIEVOLI.presenzaPregiudizievoli"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 2,
+                "intervalSec": 30
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              },
+              "extensionPoints": {
+                "pluggableRequest": false,
+                "pluggableKo": true
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "VERTICALI",
+        "gates": [
+          {
+            "gateId": "G_PRE_1",
+            "rules": [
+              {
+                "type": "DONT_WAIT",
+                "blockId": "B_ORACOLO2"
+              }
+            ]
+          },
+          {
+            "gateId": "G_PRE_2",
+            "rules": [
+              {
+                "type": "ONLY_OK"
+              }
+            ]
+          }
+        ],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_ORACOLO",
+            "B_PREGIUDIZIEVOLI"
+          ],
+          "dontWait": [
+            "B_ORACOLO2"
+          ],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Non attendere: Oracolo 2 [TIM]",
+            "Proseguono solo i prodotti OK"
+          ]
+        }
+      }
+    },
+    {
+      "order": 2,
+      "stepId": "VERTICALI",
+      "name": "Verifiche Verticali",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_CRIBIS",
+              "taskId": "CRIBIS",
+              "taskName": "Cribis",
+              "service": {
+                "method": "GET",
+                "path": "/cribis/v1/rating/{codiceFiscale}"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 1
+              },
+              "products": [
+                "CONTO"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "codiceFiscale",
+                  "required": true,
+                  "source": "cliente.codiceFiscale"
+                }
+              ],
+              "output": [
+                {
+                  "name": "rating",
+                  "target": "esiti.B_CRIBIS.rating"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 2,
+                "intervalSec": 30
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "BO",
+        "gates": [
+          {
+            "gateId": "G_VER",
+            "rules": [
+              {
+                "type": "STOP_ON_KO"
+              }
+            ]
+          }
+        ],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_CRIBIS"
+          ],
+          "dontWait": [],
+          "stopOnKo": "ALL",
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Ferma tutta l'offerta se c'è almeno un KO",
+            "Proseguono solo i prodotti OK"
+          ]
+        }
+      }
+    },
+    {
+      "order": 3,
+      "stepId": "BO",
+      "name": "Verifiche BO",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_STAMPA",
+              "taskId": "STAMPA_CONTRATTI",
+              "taskName": "Stampa contratti",
+              "service": {
+                "method": "POST",
+                "path": "/contratti/v1/stampa"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 3
+              },
+              "products": [
+                "CONTO",
+                "EVO",
+                "LIBMIN"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "idPratica",
+                  "required": true,
+                  "source": "pratica.id"
+                },
+                {
+                  "name": "codiceProdotto",
+                  "required": true,
+                  "source": "prodotto.id"
+                }
+              ],
+              "output": [
+                {
+                  "name": "idDocumento",
+                  "target": "esiti.B_STAMPA.idDocumento"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 10
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "ATTIVAZIONI",
+        "gates": [],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_STAMPA"
+          ],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "EXCLUDE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "Proseguono solo i prodotti OK (default)"
+          ]
+        }
+      }
+    },
+    {
+      "order": 4,
+      "stepId": "ATTIVAZIONI",
+      "name": "Attivazioni",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "PARALLEL",
+          "activities": [
+            {
+              "activityId": "B_ATT_BANCA",
+              "taskId": "ATTIVAZIONE_BANCARIA",
+              "taskName": "Attivazione prodotto bancario",
+              "service": {
+                "method": "POST",
+                "path": "/corebanking/v1/attivazioni"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 3
+              },
+              "products": [
+                "CONTO",
+                "EVO",
+                "LIBMIN"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "idPratica",
+                  "required": true,
+                  "source": "pratica.id"
+                },
+                {
+                  "name": "codiceProdotto",
+                  "required": true,
+                  "source": "prodotto.id"
+                }
+              ],
+              "output": [
+                {
+                  "name": "idRapporto",
+                  "target": "esiti.B_ATT_BANCA.idRapporto"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 60
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            },
+            {
+              "activityId": "B_STAMPA_TIM",
+              "taskId": "STAMPA_CONTRATTI",
+              "taskName": "Stampa contratti",
+              "service": {
+                "method": "POST",
+                "path": "/contratti/v1/stampa"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "ONE_CALL_PER_PRODUCT",
+                "calls": 1
+              },
+              "products": [
+                "TIM"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "idPratica",
+                  "required": true,
+                  "source": "pratica.id"
+                },
+                {
+                  "name": "codiceProdotto",
+                  "required": true,
+                  "source": "prodotto.id"
+                }
+              ],
+              "output": [
+                {
+                  "name": "idDocumento",
+                  "target": "esiti.B_STAMPA_TIM.idDocumento"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 10
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "exitGate": {
+        "to": "POST_ATTIVAZIONI",
+        "gates": [
+          {
+            "gateId": "G_ATT",
+            "rules": [
+              {
+                "type": "CONTINUE_ON_KO"
+              }
+            ]
+          }
+        ],
+        "effectivePolicy": {
+          "waitFor": [
+            "B_ATT_BANCA",
+            "B_STAMPA_TIM"
+          ],
+          "dontWait": [],
+          "stopOnKo": null,
+          "koProducts": "CONTINUE",
+          "description": [
+            "Attendi l'esito di tutti i blocchi",
+            "I prodotti KO proseguono comunque"
+          ]
+        }
+      }
+    },
+    {
+      "order": 5,
+      "stepId": "POST_ATTIVAZIONI",
+      "name": "Post Attivazioni",
+      "stages": [
+        {
+          "stage": 1,
+          "execution": "SINGLE",
+          "activities": [
+            {
+              "activityId": "B_COMUNICAZIONI",
+              "taskId": "COMUNICAZIONI",
+              "taskName": "Invio comunicazioni",
+              "service": {
+                "method": "POST",
+                "path": "/comunicazioni/v1/invio"
+              },
+              "executionType": "SYNC",
+              "invocation": {
+                "mode": "SINGLE_CALL_FOR_N_PRODUCTS",
+                "calls": 1
+              },
+              "products": [
+                "CONTO",
+                "EVO",
+                "LIBMIN",
+                "TIM"
+              ],
+              "dependsOn": [],
+              "input": [
+                {
+                  "name": "email",
+                  "required": true,
+                  "source": "cliente.email"
+                },
+                {
+                  "name": "template",
+                  "required": true,
+                  "source": null
+                }
+              ],
+              "output": [
+                {
+                  "name": "idComunicazione",
+                  "target": "esiti.B_COMUNICAZIONI.idComunicazione"
+                }
+              ],
+              "retry": {
+                "maxAttempts": 3,
+                "intervalSec": 60
+              },
+              "outcomes": {
+                "OK": {
+                  "action": "CONTINUE",
+                  "notifyCustomer": false
+                },
+                "KO": {
+                  "action": "MARK_PRODUCT_KO",
+                  "notifyCustomer": false
+                }
+              },
+              "extensionPoints": {
+                "pluggableRequest": true,
+                "pluggableKo": false
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "servicesToDevelop": [
+    {
+      "taskId": "ORACOLO",
+      "name": "Oracolo",
+      "description": "Verifiche antifrode/antiriciclaggio sul cliente. Una chiamata per N prodotti.",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/oracolo/v1/check"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "inputs": [
+        {
+          "name": "codiceFiscale",
+          "required": true
+        },
+        {
+          "name": "documento",
+          "required": true
+        },
+        {
+          "name": "prodotti",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "esitoOracolo",
+          "description": "OK/KO per prodotto"
+        },
+        {
+          "name": "scoreRischio",
+          "description": "0-100"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO",
+        "KO_TASK"
+      ],
+      "extensionPoints": {
+        "pluggableRequest": true,
+        "pluggableKo": true
+      },
+      "usedIn": [
+        {
+          "step": "PRELIMINARI",
+          "activityId": "B_ORACOLO",
+          "products": [
+            "CONTO",
+            "EVO",
+            "LIBMIN"
+          ],
+          "invocation": "SINGLE_CALL_FOR_N_PRODUCTS"
+        }
+      ]
+    },
+    {
+      "taskId": "ORACOLO_2",
+      "name": "Oracolo 2",
+      "description": "Verifiche specifiche partner telco",
+      "scope": "vertical",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/partner/tim/v1/oracolo"
+      },
+      "compatibleProducts": [
+        "TIM"
+      ],
+      "inputs": [
+        {
+          "name": "codiceFiscale",
+          "required": true
+        },
+        {
+          "name": "msisdn",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "name": "esitoOracolo2",
+          "description": "OK/KO"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO"
+      ],
+      "extensionPoints": null,
+      "usedIn": [
+        {
+          "step": "PRELIMINARI",
+          "activityId": "B_ORACOLO2",
+          "products": [
+            "TIM"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        }
+      ]
+    },
+    {
+      "taskId": "PREGIUDIZIEVOLI",
+      "name": "Pregiudizievoli",
+      "description": "Controllo presenza di pregiudizievoli/protesti",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/pregiudizievoli/v1/check"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "inputs": [
+        {
+          "name": "codiceFiscale",
+          "required": true
+        },
+        {
+          "name": "scoreRischio",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "name": "presenzaPregiudizievoli",
+          "description": "true/false"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO",
+        "KO_TASK"
+      ],
+      "extensionPoints": {
+        "pluggableRequest": false,
+        "pluggableKo": true
+      },
+      "usedIn": [
+        {
+          "step": "PRELIMINARI",
+          "activityId": "B_PREGIUDIZIEVOLI",
+          "products": [
+            "CONTO",
+            "EVO",
+            "LIBMIN"
+          ],
+          "invocation": "SINGLE_CALL_FOR_N_PRODUCTS"
+        }
+      ]
+    },
+    {
+      "taskId": "CRIBIS",
+      "name": "Cribis",
+      "description": "Verifica se il cliente è \"in rosso\" (solo Conto)",
+      "scope": "vertical",
+      "executionType": "SYNC",
+      "service": {
+        "method": "GET",
+        "path": "/cribis/v1/rating/{codiceFiscale}"
+      },
+      "compatibleProducts": [
+        "CONTO"
+      ],
+      "inputs": [
+        {
+          "name": "codiceFiscale",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "rating",
+          "description": "Classe di rischio"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO"
+      ],
+      "extensionPoints": null,
+      "usedIn": [
+        {
+          "step": "VERTICALI",
+          "activityId": "B_CRIBIS",
+          "products": [
+            "CONTO"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        }
+      ]
+    },
+    {
+      "taskId": "STAMPA_CONTRATTI",
+      "name": "Stampa contratti",
+      "description": "Generazione PDF contrattuali, sempre con gli stessi parametri",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/contratti/v1/stampa"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "inputs": [
+        {
+          "name": "idPratica",
+          "required": true
+        },
+        {
+          "name": "codiceProdotto",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "idDocumento",
+          "description": "Id documento archiviato"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO"
+      ],
+      "extensionPoints": null,
+      "usedIn": [
+        {
+          "step": "BO",
+          "activityId": "B_STAMPA",
+          "products": [
+            "CONTO",
+            "EVO",
+            "LIBMIN"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        },
+        {
+          "step": "ATTIVAZIONI",
+          "activityId": "B_STAMPA_TIM",
+          "products": [
+            "TIM"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        }
+      ]
+    },
+    {
+      "taskId": "ATTIVAZIONE_BANCARIA",
+      "name": "Attivazione prodotto bancario",
+      "description": "Attivazione su core banking",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/corebanking/v1/attivazioni"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN"
+      ],
+      "inputs": [
+        {
+          "name": "idPratica",
+          "required": true
+        },
+        {
+          "name": "codiceProdotto",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "idRapporto",
+          "description": "Id rapporto attivato"
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO",
+        "KO_TASK"
+      ],
+      "extensionPoints": null,
+      "usedIn": [
+        {
+          "step": "ATTIVAZIONI",
+          "activityId": "B_ATT_BANCA",
+          "products": [
+            "CONTO",
+            "EVO",
+            "LIBMIN"
+          ],
+          "invocation": "ONE_CALL_PER_PRODUCT"
+        }
+      ]
+    },
+    {
+      "taskId": "COMUNICAZIONI",
+      "name": "Invio comunicazioni",
+      "description": "Mail/SMS al cliente (benvenuto, esito, ...)",
+      "scope": "common",
+      "executionType": "SYNC",
+      "service": {
+        "method": "POST",
+        "path": "/comunicazioni/v1/invio"
+      },
+      "compatibleProducts": [
+        "CONTO",
+        "EVO",
+        "LIBMIN",
+        "TIM"
+      ],
+      "inputs": [
+        {
+          "name": "email",
+          "required": true
+        },
+        {
+          "name": "template",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "idComunicazione",
+          "description": ""
+        }
+      ],
+      "outcomes": [
+        "OK",
+        "KO"
+      ],
+      "extensionPoints": {
+        "pluggableRequest": true,
+        "pluggableKo": false
+      },
+      "usedIn": [
+        {
+          "step": "POST_ATTIVAZIONI",
+          "activityId": "B_COMUNICAZIONI",
+          "products": [
+            "CONTO",
+            "EVO",
+            "LIBMIN",
+            "TIM"
+          ],
+          "invocation": "SINGLE_CALL_FOR_N_PRODUCTS"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "errors": [],
+    "warnings": [
+      "Invio comunicazioni (Post Attivazioni): input obbligatorio \"template\" senza sorgente/valore."
+    ],
+    "infos": [
+      "Transizione Verifiche BO → Attivazioni: nessuna regola sui KO, si applica il default \"Manda solo gli OK\"."
+    ]
+  }
+}

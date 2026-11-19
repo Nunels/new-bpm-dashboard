@@ -1,0 +1,41 @@
+document:
+  dsl: "1.0.0"
+  namespace: demo
+  name: ticket-callback
+  version: "1.0.0"
+  title: Attesa della callback di un ticket
+  summary: Esempio senza servizi HTTP per provare worker e CLI (start, event, context)
+input:
+  schema:
+    format: json
+    document:
+      type: object
+      required:
+        - pratica
+do:
+  - apertura:
+      set:
+        pratica: ${ $workflow.input.pratica.id }
+        stato: IN_ATTESA_TICKET
+      export:
+        as: ${ $output }
+  - attesa-esito:
+      listen:
+        to:
+          one:
+            with:
+              type: ticket.esito
+            correlate:
+              pratica:
+                from: ${ .data.praticaId }
+                expect: ${ $context.pratica }
+      timeout:
+        after:
+          minutes: 10
+      output:
+        as: ${ .[0] }
+  - chiusura:
+      set:
+        pratica: ${ $context.pratica }
+        esito: ${ .esito }
+        operatore: ${ .operatore }
