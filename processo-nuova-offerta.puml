@@ -1,0 +1,59 @@
+@startuml processo-nuova-offerta
+title BPM AI Offer Designer — processo di creazione di una nuova offerta
+
+left to right direction
+skinparam shadowing false
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 15
+skinparam ArrowFontSize 13
+skinparam rectangle {
+  RoundCorner 12
+  BorderColor #5B6B7B
+}
+skinparam note {
+  BackgroundColor #FFF8E1
+  BorderColor #C98A00
+}
+
+actor "Analista" as A
+
+rectangle "**1. Specifiche**\nfile con la descrizione della nuova offerta,\nspecifiche api, specifiche tecniche, ecc..." as S #FFFFFF
+
+rectangle "**2. Workflow AI o Agent**\ngenera l'offerta in formato json\ncon schema strutturato" as AI #FFF4D6
+
+rectangle "**3. Dashboard**\nl'analista rivede e se necessario\nmodifica l'offerta" as D #E7F0F6
+
+rectangle "**4. Workflow (DSL)**\ngenerato in automatico\ndalla dashboard" as W #FFFFFF
+
+rectangle "**5. Interprete Temporal**\nesegue il workflow\nsu Temporal" as T #ECE6FB
+
+rectangle "Sistemi e API\ndei prodotti" as SYS #F4F6F8
+
+A --> S : carica
+S --> AI
+AI --> D : offerta\nvalidata
+D <--> W : generazione
+W --> T : pubblicazione\n(senza sviluppo)
+T --> SYS : chiamate\nai servizi
+
+note bottom of AI
+  Lo schema dell'offerta è definito da noi.
+  La risposta dell'AI viene sempre validata.
+  Se ci sono errori l'AI corregge (iterativamente):
+   generate → validate → repair.
+end note
+
+note bottom of W
+  Il workflow non lo scrive l'AI:
+  è generato dalla dashboard in modo determnistico
+  e validato con lo schema ufficiale
+  Serverless Workflow.
+end note
+
+note bottom of T
+  Serve un interprete Temporal:
+  un'unica applicazione generica che
+  legge qualsiasi workflow pubblicato
+  e lo esegue.
+end note
+@enduml

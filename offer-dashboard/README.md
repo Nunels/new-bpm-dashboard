@@ -3,15 +3,17 @@
 Prototipo statico (HTML/CSS/JS, nessun build) della dashboard per configurare il processo di vendita di un'offerta composta da 1..N prodotti. Produce un **Execution Plan** (JSON + vista leggibile) da consegnare ai team che sviluppano i servizi di backend / il motore di processo.
 
 ## Avvio
-Apri `index.html` con doppio click (Edge/Chrome). Non serve un server: i dati sono salvati nel `localStorage` del browser.
+Apri `generate.html` con doppio click (Edge/Chrome). Non serve un server per la dashboard: i dati sono salvati nel `localStorage` del browser. La generazione da specifiche richiede invece il backend [offer-agent](../offer-agent/README.md), che serve la dashboard e apre `generate.html` alla radice (`/`).
 Al primo avvio vengono caricati i dati demo (prodotti Conto, Evo, Lib Min, TIM; task Oracolo, Oracolo 2, Pregiudizievoli, Cribis, ...; offerta d'esempio ricostruita dallo schizzo). "↺ Reset demo" li ripristina.
 
 ## Le pagine
+Nell'ordine del flusso di lavoro (barra in alto):
+
 | Pagina | Scopo |
 |---|---|
-| `catalog.html` — Catalogo prodotti & task | Definizione dei prodotti e dei task riutilizzabili: ambito (common/verticale), sync/async, servizio (metodo + path), prodotti compatibili, step ammessi, input/output, esiti supportati (OK, KO, KO con task), estensioni pluggable, default (retry, coda task manuale, topic callback). |
-| `index.html` — Configurazione offerta | Griglia **prodotti (righe) × step (colonne)** con i 5 step fissi: Verifiche Preliminari → Verifiche Verticali → Verifiche BO → Attivazioni → Post Attivazioni. Due tab: **Visuale** e **DSL**; per le offerte generate dall'agente compare anche **JSON modello** (sola lettura). |
-| `generate.html` — Genera da specifiche | Caricamento di un file di specifiche (Markdown/testo): l'agente AI propone l'offerta, che si apre nella dashboard. Richiede il backend [offer-agent](../offer-agent/README.md). |
+| `generate.html` — Genera da specifiche | **1.** Caricamento di un file di specifiche (Markdown/testo): l'agente AI propone l'offerta, che si apre nella dashboard. Richiede il backend [offer-agent](../offer-agent/README.md). |
+| `index.html` — Configurazione offerta | **2.** Griglia **prodotti (righe) × step (colonne)** con i 5 step fissi: Verifiche Preliminari → Verifiche Verticali → Verifiche BO → Attivazioni → Post Attivazioni. Due tab: **Visuale** e **DSL**; per le offerte generate dall'agente compare anche **JSON modello** (sola lettura). |
+| `catalog.html` — Catalogo prodotti & task | **3.** Definizione dei prodotti e dei task riutilizzabili: ambito (common/verticale), sync/async, servizio (metodo + path), prodotti compatibili, step ammessi, input/output, esiti supportati (OK, KO, KO con task), estensioni pluggable, default (retry, coda task manuale, topic callback). |
 
 ## Generazione da specifiche (agente AI)
 Flusso: carica il file → l'agente genera la **configurazione dell'offerta** (non il DSL) → validazione e correzione automatica → esito.
