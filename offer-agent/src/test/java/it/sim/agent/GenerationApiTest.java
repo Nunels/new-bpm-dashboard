@@ -208,7 +208,6 @@ class GenerationApiTest {
 
     @Test
     void dashboardIsServedByTheBackend() {
-        given().when().get("/").then().statusCode(200).body(org.hamcrest.Matchers.containsString("js/generate.js"));
         given().when().get("/generate.html").then().statusCode(200);
         given().when().get("/index.html").then().statusCode(200).body(org.hamcrest.Matchers.containsString("js/dsl-import.js"));
     }

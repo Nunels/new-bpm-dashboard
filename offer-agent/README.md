@@ -53,9 +53,9 @@ cd ..\temporal-offer-interpreter; mvn -q install -DskipTests; cd ..\offer-agent
 mvn package -DskipTests
 $env:GEMINI_API_KEY = "..."                        # obbligatoria
 $env:GEMINI_MODEL = "gemini-4-hydrogen"            # facoltativa
-java -jar target\quarkus-app\quarkus-run.jar      # http://localhost:8090/ (apre generate.html)
+java -jar target\quarkus-app\quarkus-run.jar      # http://localhost:8090/generate.html
 ```
-Il backend serve anche la dashboard: la radice (`http://localhost:8090/`) apre «Genera da specifiche», seguita da «Configurazione offerta» (`/index.html`) e «Catalogo». Usare questo indirizzo: la dashboard aperta da file (`file://`) ha un archivio locale separato, quindi non vedrebbe le offerte generate. Funziona comunque anche da file, perché il CORS è abilitato e l'indirizzo del backend si imposta nella pagina.
+Il backend serve anche la dashboard (`http://localhost:8090/index.html`). Usare questo indirizzo: la dashboard aperta da file (`file://`) ha un archivio locale separato, quindi non vedrebbe le offerte generate. Funziona comunque anche da file, perché il CORS è abilitato e l'indirizzo del backend si imposta nella pagina.
 
 **Prova senza chiave reale.** Un finto Gemini restituisce le offerte attese delle specifiche di esempio:
 ```powershell

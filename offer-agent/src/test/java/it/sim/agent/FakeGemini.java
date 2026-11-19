@@ -47,7 +47,8 @@ public class FakeGemini implements QuarkusTestResourceLifecycleManager {
         server.createContext("/v1beta/interactions", this::handle);
         server.start();
         return Map.of("agent.gemini.base-url", "http://127.0.0.1:" + server.getAddress().getPort(),
-                "agent.gemini.api-key", "test-key", "agent.gemini.model", "gemini-fake", "agent.max-attempts", "3");
+                "agent.gemini.api-key", "test-key", "agent.gemini.model", "gemini-fake", "agent.max-attempts", "3",
+                "agent.gemini.log-payloads", "false");
     }
 
     @Override

@@ -31,7 +31,7 @@
       });
       t.inputs.forEach(function (i) {
         if (i.required && !String(b.config.inputMapping[i.name] || '').trim())
-          add(warnings, name + ': input obbligatorio "' + i.name + '" senza sorgente/valore.', ref);
+          add(warnings, name + ' [' + b.id + ']: input obbligatorio "' + i.name + '" senza sorgente/valore.', ref);
       });
       if (b.config.koTask.enabled && t.outcomes.indexOf('KO_TASK') >= 0 && !String(b.config.koTask.queue || '').trim())
         add(errors, name + ': "KO con task" attivo ma coda del task manuale non indicata.', ref);
