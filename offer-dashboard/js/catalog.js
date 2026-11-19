@@ -31,6 +31,8 @@
     };
     [
       h('input', { type: 'search', placeholder: 'Cerca…', value: filter, oninput: function (e) { filter = e.target.value; renderLists(); const s = $('lists').querySelector('input'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }),
+      h('div', { class: 'list-head' }, h('h3', null, 'Pratica')),
+      item('practice', { id: 'practice', name: 'Modello della pratica' }, data.practice.fields.length + ' campi di input generale'),
       h('div', { class: 'list-head' }, h('h3', null, 'Prodotti (' + data.products.length + ')'), h('button', { class: 'small', onclick: newProduct }, '+ Prodotto')),
       data.products.filter(match).map(function (p) { return item('product', p, p.id + (p.category ? ' · ' + p.category : '')); }),
       h('div', { class: 'list-head' }, h('h3', null, 'Task (' + data.tasks.length + ')'), h('button', { class: 'small', onclick: newTask }, '+ Task')),
@@ -62,6 +64,7 @@
   function renderEditor() {
     const el = $('editor'); el.innerHTML = '';
     if (!sel) { el.append(h('div', { class: 'empty' }, 'Seleziona o crea un prodotto o un task.')); return; }
+    if (sel.type === 'practice') return el.append(practiceEditor());
     if (sel.type === 'product') {
       const p = Model.product(data, sel.id);
       if (p) return el.append(productEditor(p));
@@ -112,10 +115,12 @@
         })),
         h('div', { class: 'field-hint' }, 'Nessuno selezionato = utilizzabile in qualsiasi step.')),
       section('Input (contratto di request)',
-        listEditor(t.inputs, ['name', 'source', 'required'], { name: 'Nome', source: 'Sorgente di default', required: 'Obbl.' }, function () { return { name: 'nuovoInput', source: '', required: false }; }),
+        listEditor(t.inputs, ['name', 'type', 'source', 'required'], { name: 'Nome (percorso)', type: 'Tipo', source: 'Sorgente di default', required: 'Obbl.' },
+          function () { return { name: 'nuovoInput', type: 'string', source: '', required: false, description: '' }; }, { importFields: true }),
         check('Request pluggable (estendibile per prodotto)', !!t.extensions.request, function (on) { t.extensions.request = on; })),
       section('Output',
-        listEditor(t.outputs, ['name', 'description'], { name: 'Nome', description: 'Descrizione' }, function () { return { name: 'nuovoOutput', description: '' }; })),
+        listEditor(t.outputs, ['name', 'type', 'description'], { name: 'Nome (percorso)', type: 'Tipo', description: 'Descrizione' },
+          function () { return { name: 'nuovoOutput', type: 'string', description: '' }; }, { importFields: true })),
       section('Esiti supportati',
         h('div', null,
           check('OK', true, function () { }),
@@ -135,17 +140,87 @@
         h('button', { class: 'danger', onclick: function () { deleteTask(t); } }, '🗑 Elimina task')));
   }
 
-  /* Tabella editabile per input/output. */
-  function listEditor(arr, cols, labels, factory) {
-    const table = h('table', { class: 'tbl edit' },
-      h('thead', null, h('tr', null, cols.map(function (c) { return h('th', null, labels[c]); }), h('th'))),
-      h('tbody', null, arr.map(function (row, i) {
-        return h('tr', null, cols.map(function (c) {
+  /* Tabella editabile per input/output/campi: tipo, filtro (i task possono avere ~100 campi) e import da JSON Schema o JSON di esempio. */
+  function listEditor(arr, cols, labels, factory, opts) {
+    opts = opts || {};
+    let f = '';
+    const tbody = h('tbody');
+    const count = h('span', { class: 'muted' });
+    const fill = function () {
+      tbody.innerHTML = '';
+      const q = f.trim().toLowerCase();
+      arr.forEach(function (row, i) {
+        if (q && (String(row.name || '') + ' ' + String(row.description || '') + ' ' + String(row.source || '')).toLowerCase().indexOf(q) < 0) return;
+        tbody.append(h('tr', null, cols.map(function (c) {
           if (c === 'required') return h('td', { class: 'center' }, h('input', { type: 'checkbox', checked: !!row[c], onchange: function (e) { row[c] = e.target.checked; save(); } }));
+          if (c === 'type') return h('td', null, h('select', { value: row.type || 'string', onchange: function (e) { row.type = e.target.value; save(); } }, Fields.TYPES.map(function (t) { return h('option', { value: t }, t); })));
           return h('td', null, h('input', { type: 'text', value: row[c] || '', oninput: function (e) { row[c] = e.target.value; save(); } }));
-        }), h('td', null, h('button', { class: 'icon danger', title: 'Rimuovi', onclick: function () { arr.splice(i, 1); save(); renderEditor(); } }, '✕')));
-      })));
-    return h('div', null, table, h('button', { class: 'small', onclick: function () { arr.push(factory()); save(); renderEditor(); } }, '+ Aggiungi'));
+        }), h('td', null, h('button', { class: 'icon danger', title: 'Rimuovi', onclick: function () { arr.splice(i, 1); save(); fill(); } }, '✕'))));
+      });
+      count.textContent = arr.length + ' campi';
+    };
+    fill();
+    const table = h('table', { class: 'tbl edit' },
+      h('thead', null, h('tr', null, cols.map(function (c) { return h('th', null, labels[c]); }), h('th'))), tbody);
+    return h('div', null,
+      arr.length > 8 || opts.filterable ? h('div', { class: 'map-tools' }, h('input', { type: 'search', placeholder: 'Filtra per nome o descrizione…', oninput: function (e) { f = e.target.value; fill(); } }), count) : null,
+      h('div', { class: opts.scroll === false ? '' : 'tbl-scroll' }, table),
+      h('div', { class: 'row-actions' },
+        h('button', { class: 'small', onclick: function () { arr.push(factory()); save(); fill(); } }, '+ Aggiungi'),
+        opts.importFields ? h('button', { class: 'small', title: 'Incolla un JSON Schema (anche con $ref locali) o un JSON di esempio: i campi vengono aggiunti o aggiornati', onclick: function () {
+          importModal(function (fields) {
+            let added = 0;
+            fields.forEach(function (x) {
+              const cur = arr.find(function (r) { return r.name === x.name; });
+              if (cur) { cur.type = x.type; if (x.description && !cur.description) cur.description = x.description; if (x.required) cur.required = true; return; }
+              const row = factory();
+              row.name = x.name; row.type = x.type; row.required = !!x.required; row.description = x.description || '';
+              arr.push(row); added++;
+            });
+            save(); fill();
+            toast(fields.length + ' campi letti (' + added + ' nuovi)', 'ok');
+          });
+        } }, '⇪ Importa da JSON Schema / esempio') : null,
+        opts.extra || null));
+  }
+
+  function importModal(onApply) {
+    const ta = h('textarea', { rows: 14, placeholder: 'Incolla qui un JSON Schema (es. lo schema del body da OpenAPI) oppure un JSON di esempio della request/response', style: { width: '100%', fontFamily: 'monospace', fontSize: '12px' } });
+    const file = h('input', { type: 'file', accept: '.json,application/json', onchange: function (e) {
+      const fl = e.target.files[0]; if (!fl) return;
+      const r = new FileReader(); r.onload = function () { ta.value = String(r.result); }; r.readAsText(fl);
+    } });
+    Util.modal('Importa campi', h('div', null,
+      h('p', { class: 'muted' }, 'Gli oggetti annidati diventano nomi con il punto (cliente.documento.numero). Gli array restano un unico campo. Se il campo esiste già ne viene aggiornato il tipo.'),
+      file, ta), [{
+      label: 'Importa', class: 'primary', onClick: function () {
+        const r = Fields.parse(ta.value);
+        if (r.error) return toast(r.error, 'error');
+        Util.closeModal();
+        onApply(r.fields);
+      }
+    }]);
+  }
+
+  function practiceEditor() {
+    const fields = data.practice.fields;
+    return h('div', { class: 'editor-card' },
+      h('div', { class: 'panel-head block-head' }, h('div', { class: 'panel-kicker' }, 'Input generale del processo'), h('h3', null, 'Modello della pratica'),
+        h('div', { class: 'muted' }, 'Dati con cui parte la pratica: i task li leggono con percorsi come cliente.codiceFiscale, e diventano lo schema di input del workflow generato. pratica.id è sempre presente (correlazione eventi).')),
+      section('Campi',
+        listEditor(fields, ['name', 'type', 'required', 'description'], { name: 'Percorso', type: 'Tipo', required: 'Obbl.', description: 'Descrizione' },
+          function () { return { name: 'sezione.campo', type: 'string', required: false, description: '' }; },
+          {
+            filterable: true, importFields: true,
+            extra: [
+              h('button', { class: 'small', title: 'Aggiunge i percorsi già usati nelle sorgenti dei task', onclick: function () {
+                let n = 0;
+                Fields.inferPractice(data.tasks).fields.forEach(function (x) { if (!fields.some(function (y) { return y.name === x.name; })) { fields.push(x); n++; } });
+                save(); renderEditor(); toast(n + ' campi aggiunti dai task', 'ok');
+              } }, 'Ricava dai task'),
+              h('button', { class: 'small', onclick: function () { Store.download(Fields.toSchema(fields), 'pratica.schema.json'); } }, '⬇ JSON Schema')
+            ]
+          })));
   }
 
   function newProduct() {

@@ -74,6 +74,21 @@ public class FakeGemini implements QuarkusTestResourceLifecycleManager {
             String prompt = body.path("input").asText();
             Matcher m = FILE.matcher(prompt);
             String file = m.find() ? m.group(1) : "";
+            if (prompt.contains(PromptBuilder.COVERAGE_MARKER)) {
+                // revisione: guarda solo la parte CONFIGURAZIONE del prompt e segnala la lacuna finché non è colmata
+                String cfg = prompt.substring(prompt.indexOf("CONFIGURAZIONE (JSON)"));
+                String gaps = "[]";
+                if (file.equals("copertura-lacunosa.md") && !cfg.contains("\"koTask\"")) {
+                    gaps = "[{\"blockId\":\"B_VERIFICA_DOCUMENTO\",\"issue\":\"la specifica richiede un task manuale su KO con coda BO_DOCUMENTI e SLA 4 ore, la configurazione non ha koTask\","
+                            + "\"configPatch\":{\"koTask\":{\"enabled\":true,\"queue\":\"BO_DOCUMENTI\",\"slaHours\":4}}}]";
+                } else if (file.equals("copertura-template.md") && !cfg.contains("WELCOME_KIT")) {
+                    gaps = "[{\"blockId\":\"B_BENVENUTO\",\"issue\":\"la specifica richiede il template WELCOME_KIT\",\"configPatch\":{\"inputMapping\":{\"template\":\"WELCOME_KIT\"}}}]";
+                } else if (file.equals("copertura-ostinata.md") || file.equals("copertura-troncata.md")) {
+                    gaps = "[{\"blockId\":\"B_VERIFICA_DOCUMENTO\",\"issue\":\"la specifica richiede un blocco aggiuntivo che la configurazione non ha\"}]";
+                }
+                ok(ex, "{\"gaps\":" + gaps + "}");
+                return;
+            }
             int n = CALLS.computeIfAbsent(file, k -> new AtomicInteger()).incrementAndGet();
             boolean repair = prompt.contains("ERRORI DA CORREGGERE");
             switch (file) {
@@ -92,6 +107,12 @@ public class FakeGemini implements QuarkusTestResourceLifecycleManager {
                         ok(ex, expected("conto-mono.md"));
                     }
                 }
+                case "copertura-lacunosa.md" -> ok(ex, withoutKoTask(expected("conto-mono.md")));
+                case "copertura-ostinata.md" -> ok(ex, withoutKoTask(expected("conto-mono.md")));
+                case "copertura-template.md" -> ok(ex, withoutTemplate(expected("famiglia.md")));
+                case "copertura-troncata.md" -> ok(ex, repair ? onlyFirstBlock(expected("famiglia.md")) : expected("famiglia.md"));
+                case "template-mancante.md" -> ok(ex, repair ? expected("famiglia.md") : withoutTemplate(expected("famiglia.md")));
+                case "template-ostinato.md" -> ok(ex, withoutTemplate(expected("famiglia.md")));
                 case "irreparabile.md" -> ok(ex, "{\"offer\":{\"id\":\"x\"}}");
                 case "con-recinto.md" -> ok(ex, "```json\n" + expected("conto-mono.md") + "\n```");
                 default -> {
@@ -100,6 +121,47 @@ public class FakeGemini implements QuarkusTestResourceLifecycleManager {
                     else ok(ex, e);
                 }
             }
+        }
+    }
+
+    /** Correzione "pigra": restituisce solo il primo blocco e nessuna barra, perdendo il resto della configurazione. */
+    private static String onlyFirstBlock(String json) {
+        try {
+            ObjectNode r = (ObjectNode) JSON.readTree(json);
+            ObjectNode offer = (ObjectNode) r.get("offer");
+            JsonNode first = offer.at("/blocks/0");
+            offer.putArray("blocks").add(first);
+            offer.putArray("gates");
+            return r.toString();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Risposta valida ma senza il task manuale su KO richiesto dalla specifica. */
+    private static String withoutKoTask(String json) {
+        try {
+            ObjectNode r = (ObjectNode) JSON.readTree(json);
+            r.at("/offer/blocks").forEach(b -> {
+                JsonNode cfg = b.path("config");
+                if (cfg.isObject()) ((ObjectNode) cfg).remove("koTask");
+            });
+            return r.toString();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Risposta valida ma con l'input obbligatorio "template" delle comunicazioni senza valore. */
+    private static String withoutTemplate(String json) {
+        try {
+            ObjectNode r = (ObjectNode) JSON.readTree(json);
+            r.at("/offer/blocks").forEach(b -> {
+                if ("COMUNICAZIONI".equals(b.path("taskId").asText())) ((ObjectNode) b.at("/config/inputMapping")).remove("template");
+            });
+            return r.toString();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
         }
     }
 

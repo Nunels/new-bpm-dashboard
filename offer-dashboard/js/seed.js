@@ -8,6 +8,19 @@ window.SEED = {
     { id: 'ATTIVAZIONI', name: 'Attivazioni' },
     { id: 'POST_ATTIVAZIONI', name: 'Post Attivazioni' }
   ],
+  /* Modello dati della pratica: l'input generale del processo. I campi si definiscono/importano nella pagina Catalogo. */
+  practice: {
+    fields: [
+      { name: 'pratica.id', type: 'string', required: true, description: 'Identificativo della pratica' },
+      { name: 'pratica.documenti', type: 'array', required: true, description: 'Documenti caricati dal cliente' },
+      { name: 'cliente.codiceFiscale', type: 'string', required: true, description: '' },
+      { name: 'cliente.email', type: 'string', required: true, description: '' },
+      { name: 'cliente.documento.tipo', type: 'string', required: true, description: 'Tipo di documento d\'identità' },
+      { name: 'cliente.documento.numero', type: 'string', required: true, description: '' },
+      { name: 'cliente.documento.scadenza', type: 'date', required: true, description: '' },
+      { name: 'prodotti.TIM.msisdn', type: 'string', required: false, description: 'Numero di linea (solo offerte con TIM)' }
+    ]
+  },
   products: [
     { id: 'CONTO', name: 'Conto', category: 'Banking', description: 'Conto corrente online' },
     { id: 'EVO', name: 'Evo', category: 'Banking', description: 'Carta di debito evoluta' },

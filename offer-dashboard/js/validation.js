@@ -30,8 +30,11 @@
         else if (dep.stepId !== b.stepId) add(errors, name + ': dipende da un blocco di un altro step.', ref);
       });
       t.inputs.forEach(function (i) {
-        if (i.required && !String(b.config.inputMapping[i.name] || '').trim())
-          add(warnings, name + ' [' + b.id + ']: input obbligatorio "' + i.name + '" senza sorgente/valore.', ref);
+        const st = Fields.status(data, offer, b, i);
+        if (st.level === 'none') {
+          if (i.required) add(warnings, name + ' [' + b.id + ']: input obbligatorio "' + i.name + '" senza sorgente/valore.', ref);
+        } else if (st.level === 'error') add(errors, name + ' [' + b.id + ']: input "' + i.name + '": ' + st.msg + '.', ref);
+        else if (st.level === 'warn') add(warnings, name + ' [' + b.id + ']: input "' + i.name + '": ' + st.msg + '.', ref);
       });
       if (b.config.koTask.enabled && t.outcomes.indexOf('KO_TASK') >= 0 && !String(b.config.koTask.queue || '').trim())
         add(errors, name + ': "KO con task" attivo ma coda del task manuale non indicata.', ref);

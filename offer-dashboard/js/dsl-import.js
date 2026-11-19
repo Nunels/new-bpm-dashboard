@@ -138,12 +138,12 @@
 
   /* DSL principale rigenerato dall'offerta (stessa catena della dashboard: piano → exporter). */
   function exportMain(data, offer) {
-    const d = { steps: data.steps, products: data.products, tasks: data.tasks, offers: [offer] };
+    const d = { steps: data.steps, products: data.products, tasks: data.tasks, practice: data.practice, offers: [offer] };
     return global.Exporters.buildServerless(global.ExecutionPlan.build(d, offer)).main;
   }
 
   function normalizedOffer(data, offer) {
-    const d = global.Model.normalize({ steps: data.steps, products: clone(data.products), tasks: clone(data.tasks), offers: [clone(offer)] });
+    const d = global.Model.normalize({ steps: data.steps, products: clone(data.products), tasks: clone(data.tasks), practice: data.practice && clone(data.practice), offers: [clone(offer)] });
     return d.offers[0];
   }
 

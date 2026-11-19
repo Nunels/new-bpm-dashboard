@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: it.sim.temporal.JqExpressionEngineTest
 -------------------------------------------------------------------------------
-Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.064 s -- in it.sim.temporal.JqExpressionEngineTest
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.983 s -- in it.sim.temporal.JqExpressionEngineTest

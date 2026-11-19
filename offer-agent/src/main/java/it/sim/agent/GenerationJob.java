@@ -51,6 +51,8 @@ public final class GenerationJob {
     public volatile List<String> warnings = List.of();
     public volatile List<String> errors = List.of();
     public volatile Map<String, String> simulation = new LinkedHashMap<>();
+    /** Correzioni di configurazione applicate automaticamente dal controllo di copertura (blocco: differenza risolta). */
+    public volatile List<String> appliedFixes = List.of();
 
     GenerationJob(String fileName, String model) {
         this.fileName = fileName;

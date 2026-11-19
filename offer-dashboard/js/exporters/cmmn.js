@@ -25,12 +25,13 @@
     return it;
   };
 
+  let curPlan = null;
   function httpTask(defId, a) {
     const url = X.BASE_URL + (a.service.path || '').replace(/\{(\w+)\}/g, '${$1}');
     const body = {};
     a.input.forEach(function (i) {
-      const s = X.source(i.source);
-      body[i.name] = s.kind === 'literal' ? s.value : s.kind === 'none' ? null : '${' + s.path + '}';
+      const s = X.source(i.source, curPlan);
+      Fields.setPath(body, i.name, s.kind === 'literal' ? s.value : s.kind === 'none' ? null : '${' + s.path + '}');
     });
     return '<task id="' + defId + '" name="' + X.xml(a.taskName) + '" flowable:type="http">' +
       '<documentation>' + X.xml('Prodotti: ' + a.products.join(', ') + ' · ' + a.invocation.mode + ' · retry ' + a.retry.maxAttempts) + '</documentation>' +
@@ -68,6 +69,7 @@
   }
 
   function build(plan) {
+    curPlan = plan;
     const B = new Builder();
     const caseId = X.sid(plan.offer.id);
     const CP = 'CasePlan_' + caseId;

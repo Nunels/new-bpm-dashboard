@@ -305,6 +305,22 @@ code.api { font-size: 11px; }
 .outcome.ko { background: var(--ko-l); flex-direction: row; align-items: center; gap: 6px; }
 .outcome.kotask { background: var(--orange-l); }
 .out-row { font-size: 12px; }
+.map-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.map-tools input[type=search] { flex: 1; min-width: 140px; }
+.map-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 6px 14px; }
+.map-row { display: flex; flex-direction: column; gap: 2px; }
+.map-name { font-size: 12px; }
+.map-type { font-size: 11px; }
+.map-input { display: flex; align-items: center; gap: 6px; }
+.map-input input { flex: 1; min-width: 0; }
+.map-status { width: 18px; text-align: center; font-weight: 700; cursor: help; color: var(--muted); }
+.map-status.ok { color: var(--ok, #1a8f4a); }
+.map-status.fixed { color: var(--blue); }
+.map-status.warn { color: var(--orange-d); }
+.map-status.error { color: var(--ko); }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.tbl-scroll { max-height: 420px; overflow: auto; }
+.tbl.edit select { width: 100%; }
 .rule { border: 1px solid var(--orange-line); background: #fff8f2; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .rule-head { display: flex; gap: 6px; }
 .add-rule { display: flex; flex-wrap: wrap; gap: 4px; }

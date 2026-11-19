@@ -57,7 +57,16 @@ Il DSL viene poi generato dalla dashboard come sempre. Dettagli, modello e limit
   - *Diagramma BPMN*: anteprima navigabile (bpmn-js) del processo Camunda 8 generato;
   - *Export motori*: file nativi per i motori di processo (vedi sotto), con anteprima, download e copia;
   - *JSON* e *YAML* (stesso contenuto), scaricabili e copiabili.
-- **Esporta/Importa**: l'intera configurazione (cataloghi + offerte) in JSON.
+- **Esporta/Importa**: l'intera configurazione (cataloghi + offerte + modello della pratica) in JSON.
+
+## Dati: pratica, input e output dei task
+I task possono avere decine di campi (fino a ~100). Il flusso dei dati è modellato così:
+- **Modello della pratica** (Catalogo → *Modello della pratica*): i dati con cui parte il processo, con percorso (`cliente.documento.numero`), tipo, obbligatorietà e descrizione. Si importa incollando un **JSON Schema** (anche con `$ref` locali; da un OpenAPI serve lo schema del body, non l'intero documento) o un **JSON di esempio**; si può ricavare dai percorsi già usati nei task e scaricare come JSON Schema. `pratica.id` c'è sempre (correlazione degli eventi). Nel DSL diventa lo **schema di input** del workflow.
+- **Input/output dei task**: ogni campo ha nome (percorso con il punto = oggetto annidato nel body), tipo e descrizione; tabelle con filtro e import da JSON Schema/esempio.
+- **Mappatura input (pannello blocco)**: per ogni input una sorgente scelta da un elenco filtrato per blocco — campo della pratica, `esiti.<blocco>.<campo>` (output di un blocco **già eseguito**: step precedente o "Esegui dopo"), sorgente di sistema (`offerta.prodotti`, `prodotto.id`) o valore fisso. Ogni riga ha lo stato (✔ risolto, ＝ valore fisso, ⚠ avviso, ✖ errore, ○ vuoto); filtro, «solo non mappati» e **⚡ Mappa automaticamente** (per nome, solo se univoco).
+- **Output per prodotto**: un blocco "1 chiamata per prodotto" salva il risultato anche in `esitiByProduct[blocco][prodotto]`; un blocco per prodotto che lo consuma legge quello del proprio prodotto, uno per offerta riceve la lista dei risultati.
+- **Validazione**: output o blocco inesistente, blocco non ancora eseguito, percorso assente dal modello della pratica, input obbligatorio senza sorgente.
+- Limiti: gli array sono un campo unico (niente mapping dei singoli elementi), nessuna trasformazione o conversione di tipo tra output e input, nessun merge di più sorgenti in un campo.
 
 ## Export verso motori esistenti
 Ogni exporter (`js/exporters/*.js`) legge **solo l'Execution Plan**: la dashboard non dipende dal motore e se ne possono aggiungere altri registrandoli con `Exporters.register({ id, label, notes, files(plan) })`. I file sono **scheletri importabili**: i worker/servizi vanno implementati (stream 1).
@@ -114,7 +123,7 @@ validation { errors[], warnings[], infos[] }
 
 ## Test
 ```powershell
-node --test tests/     # 10 test: andata e ritorno offerta ⇄ DSL (offerte demo + 300 casuali), modifiche ammesse e rifiutate
+node --test tests/     # 17 test: andata e ritorno offerta ⇄ DSL (offerte demo + 300 casuali), modifiche ammesse e rifiutate, modello dei campi e mappature
 ```
 Nessuna dipendenza: gli script della dashboard vengono caricati in un contesto Node isolato (`tests/harness.js`).
 
@@ -125,6 +134,7 @@ css/styles.css
 schema/offer-generation.schema.json   contratto della risposta dell'agente (offerta + assunzioni)
 js/seed.js            dati demo
 js/store.js           Util (DOM, toast, modal), Model (dominio, forma canonica), Store (localStorage, import/export)
+js/fields.js          campi dei task e della pratica: classificazione sorgenti, import schema/esempio, stato delle mappature, auto-mapping
 js/validation.js      controlli di coerenza
 js/simulator.js       motore di simulazione
 js/execution-plan.js  generazione e rendering dell'Execution Plan

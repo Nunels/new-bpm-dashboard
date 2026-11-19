@@ -138,6 +138,71 @@ class GenerationApiTest {
     }
 
     @Test
+    void omittedConfigRequirementFoundByCoverageCheckIsAppliedWithoutAnotherModelRound() throws Exception {
+        JsonNode job = generate("copertura-lacunosa.md");
+        assertEquals("SUCCESS", job.get("status").asText(), job.toString());
+        assertEquals(1, job.get("attempts").size(), "nessun tentativo di correzione: la patch si applica direttamente");
+        assertEquals(1, job.get("appliedFixes").size());
+        assertTrue(job.at("/appliedFixes/0").asText().startsWith("B_VERIFICA_DOCUMENTO: la specifica richiede un task manuale su KO"), job.at("/appliedFixes").toString());
+        assertEquals("BO_DOCUMENTI", job.at("/modelOutput/offer/blocks/0/config/koTask/queue").asText());
+        assertEquals(4, job.at("/offer/blocks/0/config/koTask/slaHours").asInt(), "lo SLA della specifica, non il default del catalogo (24)");
+        assertEquals(0, job.get("warnings").size());
+    }
+
+    @Test
+    void coverageFixKeepsOtherConfigAndResolvesMissingTemplate() throws Exception {
+        JsonNode job = generate("copertura-template.md");
+        assertEquals("SUCCESS", job.get("status").asText(), job.toString());
+        assertEquals(1, job.get("attempts").size());
+        JsonNode welcome = null;
+        for (JsonNode b : job.at("/offer/blocks")) if ("B_BENVENUTO".equals(b.path("id").asText())) welcome = b;
+        assertEquals("WELCOME_KIT", welcome.at("/config/inputMapping/template").asText());
+        assertEquals("cliente.email", welcome.at("/config/inputMapping/email").asText(), "i campi già presenti non vengono toccati");
+    }
+
+    @Test
+    void repairThatDropsExistingBlocksIsDiscardedAndLastGoodOfferKept() throws Exception {
+        JsonNode full = JSON.readTree(FakeGemini.expected("famiglia.md"));
+        JsonNode job = generate("copertura-troncata.md");
+        assertEquals("WARNING", job.get("status").asText(), job.toString());
+        assertEquals(3, job.get("attempts").size());
+        assertTrue(job.at("/attempts/1/errors/0").asText().contains("ha eliminato elementi"), job.at("/attempts/1").toString());
+        assertEquals(full.at("/offer/blocks").size(), job.at("/offer/blocks").size(), "la configurazione completa precedente viene mantenuta");
+        assertEquals(full.at("/offer/gates").size(), job.at("/offer/gates").size());
+        assertTrue(job.get("warnings").toString().contains("Controllo di copertura: B_VERIFICA_DOCUMENTO"));
+    }
+
+    @Test
+    void gapsLeftAfterLastAttemptBecomeWarnings() throws Exception {
+        JsonNode job = generate("copertura-ostinata.md");
+        assertEquals("WARNING", job.get("status").asText(), job.toString());
+        assertEquals(3, job.get("attempts").size());
+        assertTrue(job.get("warnings").toString().contains("Controllo di copertura: B_VERIFICA_DOCUMENTO"), job.get("warnings").toString());
+        assertFalse(job.get("files").isEmpty(), "l'offerta valida viene comunque restituita");
+    }
+
+    @Test
+    void fixableWarningIsSentBackAndRepaired() throws Exception {
+        JsonNode job = generate("template-mancante.md");
+        assertEquals("SUCCESS", job.get("status").asText(), job.toString());
+        assertEquals(2, job.get("attempts").size());
+        assertEquals("REPAIR", job.at("/attempts/1/kind").asText());
+        assertTrue(job.at("/attempts/0/errors/0").asText().contains("config.inputMapping.template"), job.at("/attempts/0").toString());
+        JsonNode welcome = null;
+        for (JsonNode b : job.at("/offer/blocks")) if ("B_BENVENUTO".equals(b.path("id").asText())) welcome = b;
+        assertEquals("WELCOME_KIT", welcome.at("/config/inputMapping/template").asText());
+    }
+
+    @Test
+    void unfixedWarningEndsAsWarningNotError() throws Exception {
+        JsonNode job = generate("template-ostinato.md");
+        assertEquals("WARNING", job.get("status").asText(), job.toString());
+        assertEquals(3, job.get("attempts").size());
+        assertTrue(job.get("warnings").toString().contains("input obbligatorio"));
+        assertFalse(job.get("files").isEmpty(), "l'offerta valida con avvisi viene comunque restituita");
+    }
+
+    @Test
     void persistentErrorsEndInErrorAfterMaxAttempts() throws Exception {
         JsonNode job = generate("irreparabile.md");
         assertEquals("ERROR", job.get("status").asText());

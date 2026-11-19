@@ -2,7 +2,7 @@
 function analyzeOffer(catalogJson, offerJson) {
   const catalog = JSON.parse(catalogJson);
   const input = JSON.parse(offerJson);
-  const data = Model.normalize({ products: catalog.products || [], tasks: catalog.tasks || [], offers: [input] });
+  const data = Model.normalize({ products: catalog.products || [], tasks: catalog.tasks || [], practice: catalog.practice, offers: [input] });
   const offer = data.offers[0];
   const v = Validation.validateOffer(data, offer);
   const out = {

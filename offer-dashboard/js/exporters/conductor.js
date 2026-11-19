@@ -7,13 +7,13 @@
   function inputParams(plan, a) {
     const p = {};
     a.input.forEach(function (i) {
-      const s = X.source(i.source);
-      if (s.kind === 'none') p[i.name] = null;
-      else if (s.kind === 'literal') p[i.name] = s.value;
+      const s = X.source(i.source, plan);
+      if (s.kind === 'none') Fields.setPath(p, i.name, null);
+      else if (s.kind === 'literal') Fields.setPath(p, i.name, s.value);
       else if (s.kind === 'result') {
         const src = X.findActivity(plan, s.ref);
-        p[i.name] = src ? '${' + ref(src.activityId) + '.output.' + s.field + '}' : '${workflow.input.' + s.path + '}';
-      } else p[i.name] = '${workflow.input.' + s.path + '}';
+        Fields.setPath(p, i.name, src ? '${' + ref(src.activityId) + '.output.' + s.field + '}' : '${workflow.input.' + s.path + '}');
+      } else Fields.setPath(p, i.name, '${workflow.input.' + s.path + '}');
     });
     p.products = a.products.slice();
     p.activeProducts = '${workflow.variables.activeProducts}';

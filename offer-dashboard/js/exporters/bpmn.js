@@ -9,7 +9,7 @@
   function feelList(arr) { return '[' + arr.map(function (p) { return JSON.stringify(p); }).join(', ') + ']'; }
 
   function inputExpr(plan, src) {
-    const s = X.source(src);
+    const s = X.source(src, plan);
     if (s.kind === 'none') return '=null';
     if (s.kind === 'literal') return '=' + JSON.stringify(s.value);
     if (s.kind === 'result') {

@@ -718,6 +718,62 @@
 
   function kpi(v, l) { return h('div', { class: 'kpi' }, h('div', { class: 'kpi-v' }, String(v)), h('div', { class: 'kpi-l' }, l)); }
 
+  /* Mappatura degli input del blocco: ogni input ha una sorgente (pratica, output di un blocco precedente, sistema o valore fisso) con stato. */
+  const STATUS_ICON = { none: '○', ok: '✔', fixed: '＝', warn: '⚠', error: '✖' };
+  let mapFilter = '', mapOnlyOpen = false;
+
+  function mappingSection(o, b, t) {
+    const c = b.config;
+    const src = Fields.sources(data, o, b);
+    const listId = 'map-src-' + b.id;
+    const opt = function (s, group) { return h('option', { value: s.path, label: group + (s.label ? ' · ' + s.label : '') }); };
+    const datalist = h('datalist', { id: listId },
+      src.practice.map(function (s) { return opt(s, 'pratica'); }),
+      src.results.map(function (s) { return opt(s, 'output'); }),
+      src.system.map(function (s) { return opt(s, 'sistema'); }));
+    const statusOf = function (i) { return Fields.status(data, o, b, i); };
+    const total = t.inputs.length;
+    const open = t.inputs.filter(function (i) { return statusOf(i).level === 'none'; }).length;
+    const q = function () { return mapFilter.trim().toLowerCase(); };
+    const MAX_ROWS = 60;
+    const listEl = h('div', { class: 'map-list' });
+    const fill = function () {
+      const f = q();
+      const rows = t.inputs.filter(function (i) {
+        if (mapOnlyOpen && statusOf(i).level !== 'none') return false;
+        return !f || i.name.toLowerCase().indexOf(f) >= 0 || String(c.inputMapping[i.name] || '').toLowerCase().indexOf(f) >= 0;
+      });
+      listEl.innerHTML = '';
+      rows.slice(0, MAX_ROWS).forEach(function (i) { listEl.append(mappingRow(i, c, statusOf, listId)); });
+      if (rows.length > MAX_ROWS) listEl.append(h('div', { class: 'muted' }, 'Altri ' + (rows.length - MAX_ROWS) + ' input: usa il filtro per cercarli.'));
+      if (!rows.length) listEl.append(h('div', { class: 'muted' }, total ? 'Nessun input corrisponde al filtro.' : 'Nessun input definito nel catalogo.'));
+    };
+    fill();
+    return h('div', { class: 'psection' },
+      h('h4', null, 'Input', total ? h('span', { class: 'muted' }, ' · ' + (total - open) + '/' + total + ' mappati') : null),
+      total > 8 ? h('div', { class: 'map-tools' },
+        h('input', { type: 'search', placeholder: 'Filtra input…', value: mapFilter, oninput: function (e) { mapFilter = e.target.value; fill(); } }),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: mapOnlyOpen, onchange: function (e) { mapOnlyOpen = e.target.checked; fill(); } }), 'solo non mappati')) : null,
+      total ? h('button', { class: 'small', title: 'Mappa gli input vuoti con i campi della pratica o degli output precedenti che hanno lo stesso nome (solo se univoci)', onclick: function () {
+        const done = Fields.autoMap(data, o, b, t);
+        commit('all');
+        toast(done.length ? done.length + ' input mappati automaticamente' : 'Nessuna corrispondenza univoca trovata');
+      } }, '⚡ Mappa automaticamente') : null,
+      datalist, listEl,
+      h('div', { class: 'field-hint' }, 'Sorgente: campo della pratica (es. cliente.codiceFiscale), output di un blocco già eseguito (esiti.<blocco>.<campo>), sorgente di sistema (offerta.prodotti, prodotto.id) oppure valore fisso.'));
+  }
+
+  function mappingRow(i, c, statusOf, listId) {
+    const icon = h('span', { class: 'map-status' });
+    const paint = function () { const st = statusOf(i); icon.className = 'map-status ' + st.level; icon.textContent = STATUS_ICON[st.level]; icon.title = st.msg; };
+    paint();
+    return h('div', { class: 'map-row' },
+      h('div', { class: 'map-name' }, h('code', null, i.name), i.required ? h('span', { class: 'req' }, ' *') : null, h('span', { class: 'muted map-type' }, ' ' + (i.type || 'string'))),
+      h('div', { class: 'map-input' },
+        h('input', { type: 'text', list: listId, value: c.inputMapping[i.name] || '', placeholder: 'campo, esiti.<blocco>.<campo> o valore fisso', onchange: function (e) { c.inputMapping[i.name] = e.target.value.trim(); paint(); commit('board'); } }),
+        icon));
+  }
+
   function blockPanel(o, b) {
     const t = Model.task(data, b.taskId) || { name: b.taskId, description: 'Task non presente nel catalogo', inputs: [], outputs: [], outcomes: ['OK', 'KO'], compatibleProducts: [], type: 'sync', scope: 'common', api: {} };
     const c = b.config;
@@ -757,15 +813,11 @@
         })) : h('div', { class: 'muted' }, 'Nessun altro blocco nello step.'),
           'Senza dipendenze i blocchi dello step girano in parallelo.'),
         h('div', { class: 'row2' }, field('Retry (tentativi)', num(c.retry, 'count')), field('Intervallo retry (s)', num(c.retry, 'intervalSec')))),
-      section('Input',
-        t.inputs.length ? t.inputs.map(function (i) {
-          return field(h('span', null, h('code', null, i.name), i.required ? h('span', { class: 'req' }, ' *') : null), text(c.inputMapping, i.name, 'es. cliente.codiceFiscale o valore fisso'));
-        }) : h('div', { class: 'muted' }, 'Nessun input definito nel catalogo.'),
-        h('div', { class: 'field-hint' }, 'Sorgente sulla memoria condivisa della pratica (es. cliente.*, pratica.*, esiti.<blocco>.<output>) oppure valore fisso.')),
+      mappingSection(o, b, t),
       section('Output',
-        t.outputs.length ? t.outputs.map(function (x) {
+        t.outputs.length ? t.outputs.slice(0, 15).map(function (x) {
           return h('div', { class: 'out-row' }, h('code', null, x.name), ' → ', h('code', { class: 'muted' }, 'esiti.' + b.id + '.' + x.name), x.description ? h('span', { class: 'muted' }, ' ' + x.description) : null);
-        }) : h('div', { class: 'muted' }, 'Nessun output definito.')),
+        }).concat(t.outputs.length > 15 ? [h('div', { class: 'muted' }, 'Altri ' + (t.outputs.length - 15) + ' output (elenco completo nel catalogo); sono tutti disponibili ai blocchi successivi.')] : []) : h('div', { class: 'muted' }, 'Nessun output definito.')),
       section('Gestione esiti',
         h('div', { class: 'outcome ok' }, h('b', null, 'OK'), ' → prosegui'),
         t.outcomes.indexOf('KO') >= 0 ? h('div', { class: 'outcome ko' }, h('b', null, 'KO'), ' → ',

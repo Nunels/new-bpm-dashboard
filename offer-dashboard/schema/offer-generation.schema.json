@@ -39,7 +39,7 @@
                 "description": "Opzionale: se assente si usano i default del catalogo.",
                 "properties": {
                   "callMode": { "type": "string", "enum": ["perOffer", "perProduct"], "description": "perOffer = una chiamata per tutti i prodotti del blocco; perProduct = una chiamata per prodotto." },
-                  "inputMapping": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Sorgente di ogni input del task: percorso sui dati della pratica (es. cliente.codiceFiscale), esiti.<B_BLOCCO>.<campo> oppure valore fisso." },
+                  "inputMapping": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Sorgente di ogni input del task: percorso sui dati della pratica (es. cliente.codiceFiscale), esiti.<B_BLOCCO>.<campo> oppure valore fisso. OBBLIGATORIO indicare qui gli input senza sorgente nel catalogo, per esempio il template delle comunicazioni: {\"template\": \"WELCOME_KIT\"}." },
                   "retry": {
                     "type": "object", "additionalProperties": false,
                     "properties": { "count": { "type": "integer", "minimum": 0, "maximum": 10 }, "intervalSec": { "type": "integer", "minimum": 0 } }
@@ -47,8 +47,12 @@
                   "onKo": { "type": "string", "enum": ["MARK_KO", "IGNORE"], "description": "MARK_KO = il prodotto va in KO (decidono le regole del gate); IGNORE = KO non bloccante." },
                   "koTask": {
                     "type": "object", "additionalProperties": false,
-                    "properties": { "enabled": { "type": "boolean" }, "queue": { "type": "string" }, "slaHours": { "type": "integer", "minimum": 0 } },
-                    "description": "Apertura di un task manuale su KO (solo se il task supporta l'esito KO_TASK)."
+                    "properties": {
+                      "enabled": { "type": "boolean", "description": "true se la specifica prevede un task manuale quando il blocco va in KO." },
+                      "queue": { "type": "string", "description": "Coda del task manuale indicata nella specifica, es. BO_ANTIFRODE." },
+                      "slaHours": { "type": "integer", "minimum": 0, "description": "Ore di SLA del task manuale indicate nella specifica (es. 8)." }
+                    },
+                    "description": "Task manuale su KO. DA IMPOSTARE ogni volta che la specifica dice che su un KO di questo blocco si apre un task manuale (con coda e/o SLA): {\"enabled\": true, \"queue\": \"BO_ANTIFRODE\", \"slaHours\": 8}. Solo se il task supporta l'esito KO_TASK."
                   },
                   "notify": {
                     "type": "object", "additionalProperties": false,

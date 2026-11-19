@@ -39,7 +39,7 @@ public final class EvalRunner {
         GeminiOfferModel gemini = new GeminiOfferModel(key, model, env("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
                 "2026-05-20", Duration.ofSeconds(180));
         DashboardJs js = new DashboardJs();
-        GenerationService service = new GenerationService(gemini, js, new DslChecks(), 3);
+        GenerationService service = new GenerationService(gemini, js, new DslChecks(), 3, true);
         JsonNode seed = js.seed();
         ObjectNode catalog = JSON.createObjectNode();
         catalog.set("products", seed.get("products"));

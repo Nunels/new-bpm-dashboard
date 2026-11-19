@@ -4,6 +4,7 @@ Backend Quarkus del flusso **specifiche → agente AI → dashboard → DSL**:
 1. L'analista carica un file di specifiche (Markdown/testo) in `generate.html`.
 2. L'agente chiama Gemini con **output strutturato** e ottiene la **configurazione dell'offerta**, nel formato della dashboard: prodotti, blocchi, barre di regole.
 3. La risposta viene validata. In caso di errori il modello riceve gli errori e corregge, fino a `agent.max-attempts` tentativi.
+4. **Controllo di copertura:** se la risposta è valida, una seconda chiamata al modello rilegge la specifica contro la configurazione e riporta i requisiti omessi o alterati (task manuale su KO con coda e SLA, retry, template, topic, dipendenze…). Ogni differenza ha il blocco, la spiegazione e, se riguarda la config del blocco, la **correzione già pronta** (`configPatch`): il backend la applica direttamente alla config (merge, senza toccare gli altri campi), rivalida e registra l'elenco in `appliedFixes` del job, **senza un altro giro di generazione**. Le differenze non automatizzabili (prodotti, dipendenze, barre) tornano al modello come correzione; se restano all'ultimo tentativo diventano avvisi («Controllo di copertura: …»). Se la chiamata di controllo fallisce non blocca la generazione. Costa una chiamata in più per tentativo: si spegne con `AGENT_COVERAGE_CHECK=false`.
 4. Esito:
    - **SUCCESS:** la dashboard si apre sull'offerta;
    - **WARNING:** la dashboard si apre con un banner che elenca gli avvisi;
@@ -71,15 +72,16 @@ Poi carica un file di `src/test/resources/specs`. Con un file chiamato `irrepara
 | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | endpoint (per test o proxy aziendale) |
 | `GEMINI_LOG_PAYLOADS` | `false` | logga anche prompt e risposte (solo dati fittizi) |
 | `agent.max-attempts` | 3 | tentativi totali (generazione + correzioni) |
+| `AGENT_COVERAGE_CHECK` | `true` | controllo di copertura della specifica (una chiamata in più) |
 | `agent.max-spec-chars` | 60000 | dimensione massima del file |
 
 ## API
 - `GET /api/config` → `{ model, configured, maxAttempts, maxSpecChars }`
-- `POST /api/generations` `{ fileName, specText, catalog: { products, tasks } }` → `202 { id }`. Il catalogo è quello della dashboard di chi carica.
+- `POST /api/generations` `{ fileName, specText, catalog: { products, tasks, practice? } }` → `202 { id }`. Il catalogo è quello della dashboard di chi carica.
 - `GET /api/generations/{id}` → `{ status: RUNNING|SUCCESS|WARNING|ERROR, progress, attempts[], offer, files[], warnings[], errors[], simulation }`
 
 ## Test e valutazione
-`mvn test` esegue 15 test, tutti verdi, con un **finto Gemini** che usa lo stesso formato HTTP dell'API reale:
+`mvn test` esegue 26 test, tutti verdi, con un **finto Gemini** che usa lo stesso formato HTTP dell'API reale:
 - esiti SUCCESS, WARNING (assunzioni, richieste fuori catalogo) ed ERROR (errore permanente dopo 3 tentativi, chiave rifiutata);
 - correzione riuscita al secondo tentativo, con gli errori inviati al modello;
 - nuovo tentativo su errore 503, JSON dentro un blocco di codice;
@@ -108,3 +110,4 @@ $env:GEMINI_API_KEY = "..."; mvn -q test-compile exec:java "-Dexec.mainClass=it.
 - Input solo testo/Markdown (PDF e Word esclusi per scelta).
 - L'agente produce una **proposta**: la validazione intercetta incoerenze e richieste fuori catalogo, non scelte plausibili ma sbagliate nel merito. Revisione dell'analista e simulazione restano necessarie.
 - GraalJS 23.1 su JDK 17 gira senza compilazione JIT: sufficiente per questo uso, da rivedere sotto carico.
+- Task con molti campi: al modello arriva un catalogo compatto (input obbligatori senza sorgente, output limitati a 12, elenco dei campi della pratica limitato a 80); la mappatura dettagliata dei campi non è generata dall'agente ma completata dall'analista in dashboard («⚡ Mappa automaticamente»). Il catalogo inviato può includere `practice` (modello della pratica).

@@ -70,6 +70,19 @@ class JqExpressionEngineTest {
     }
 
     @Test
+    void perProductResultsAreStoredAndReadBack() throws Exception {
+        JsonNode ctx = M.readTree("{\"esitiByProduct\":{\"B_A\":{\"CONTO\":{\"dati\":{\"codice\":\"X1\"}}}}}");
+        JsonNode out = M.readTree("{\"dati\":{\"codice\":\"Y2\"}}");
+        String store = "$context + { esitiByProduct: (($context.esitiByProduct // {}) + { \"B_A\": (($context.esitiByProduct[\"B_A\"] // {}) + { ($product): $output }) }) }";
+        JsonNode r = jq.evaluate(store, out, Map.of("context", ctx, "output", out, "product", M.getNodeFactory().textNode("EVO")));
+        assertEquals("{\"CONTO\":{\"dati\":{\"codice\":\"X1\"}},\"EVO\":{\"dati\":{\"codice\":\"Y2\"}}}", r.get("esitiByProduct").get("B_A").toString());
+        // consumatore per offerta: lista dei risultati; consumatore per prodotto: il proprio
+        JsonNode c2 = M.readTree("{\"esitiByProduct\":" + r.get("esitiByProduct") + "}");
+        assertEquals("[\"X1\",\"Y2\"]", jq.evaluate("[($context.esitiByProduct[\"B_A\"] // {}) | .[] | .dati.codice]", null, Map.of("context", c2)).toString());
+        assertEquals("\"Y2\"", jq.evaluate("(($context.esitiByProduct[\"B_A\"] // {})[$product] // {}).dati.codice", null, Map.of("context", c2, "product", M.getNodeFactory().textNode("EVO"))).toString());
+    }
+
+    @Test
     void nonDeterministicFunctionsAreDetected() {
         assertEquals("now", Expressions.nonDeterministic("now | todate"));
         assertNull(Expressions.nonDeterministic("$workflow.input.pratica.id"));

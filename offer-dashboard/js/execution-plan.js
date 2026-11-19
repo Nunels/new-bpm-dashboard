@@ -22,8 +22,8 @@
         : { mode: 'ONE_CALL_PER_PRODUCT', calls: b.products.length },
       products: b.products.slice(),
       dependsOn: b.dependsOn.slice(),
-      input: t.inputs.map(function (i) { return { name: i.name, required: !!i.required, source: (c.inputMapping[i.name] || '').trim() || null }; }),
-      output: t.outputs.map(function (o) { return { name: o.name, target: 'esiti.' + b.id + '.' + o.name }; }),
+      input: t.inputs.map(function (i) { return { name: i.name, type: i.type || 'string', required: !!i.required, source: (c.inputMapping[i.name] || '').trim() || null }; }),
+      output: t.outputs.map(function (o) { return { name: o.name, type: o.type || 'string', target: 'esiti.' + b.id + '.' + o.name }; }),
       retry: { maxAttempts: Number(c.retry.count) || 0, intervalSec: Number(c.retry.intervalSec) || 0 },
       outcomes: outcomes
     };
@@ -59,8 +59,8 @@
               services[t.id] = services[t.id] || {
                 taskId: t.id, name: t.name, description: t.description || '', scope: t.scope, executionType: a.executionType,
                 service: a.service, compatibleProducts: t.compatibleProducts.slice(),
-                inputs: t.inputs.map(function (x) { return { name: x.name, required: !!x.required }; }),
-                outputs: t.outputs.map(function (x) { return { name: x.name, description: x.description || '' }; }),
+                inputs: t.inputs.map(function (x) { return { name: x.name, type: x.type || 'string', required: !!x.required }; }),
+                outputs: t.outputs.map(function (x) { return { name: x.name, type: x.type || 'string', description: x.description || '' }; }),
                 outcomes: t.outcomes.slice(), extensionPoints: a.extensionPoints || null, usedIn: []
               };
               services[t.id].usedIn.push({ step: s.id, activityId: b.id, products: b.products.slice(), invocation: a.invocation.mode });
@@ -93,6 +93,9 @@
       planVersion: '1.0',
       generatedAt: new Date().toISOString(),
       offer: { id: offer.id, name: offer.name, description: offer.description || '' },
+      // input generale del processo: campi della pratica (e radici, per riconoscere i percorsi nelle mappature)
+      practice: { fields: (data.practice && data.practice.fields || []).map(function (f) { return { name: f.name, type: f.type || 'string', required: !!f.required }; }),
+        roots: Fields.rootsOf(data.practice && data.practice.fields) },
       products: offer.products.map(function (p) { const x = Model.product(data, p) || { id: p, name: p }; return { id: x.id, name: x.name, category: x.category || '' }; }),
       summary: {
         products: offer.products.length,

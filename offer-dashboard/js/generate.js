@@ -37,7 +37,7 @@
 
   function start() {
     const data = Store.load();
-    const body = { fileName: file.name, specText: file.text, catalog: { products: data.products, tasks: data.tasks } };
+    const body = { fileName: file.name, specText: file.text, catalog: { products: data.products, tasks: data.tasks, practice: data.practice } };
     job = { status: 'RUNNING', progress: 'Invio delle specifiche…', attempts: [] };
     render();
     api('/api/generations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

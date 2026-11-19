@@ -9,15 +9,32 @@
   /* Filtro "il valore è uno di": jackson-jq (usato da Quarkus Flow) non implementa IN/1, quindi uso confronti espliciti. */
   function jqAnyOf(arr) { return arr.length ? '(' + arr.map(function (p) { return '. == ' + JSON.stringify(p); }).join(' or ') + ')' : 'false'; }
 
-  function inputExpr(plan, i) {
-    const s = X.source(i.source);
+  /* Percorso jq di un campo con i punti ("a.b-c.d"): i segmenti non identificatori usano la forma ["..."]. */
+  function jqSeg(seg) { return /^[A-Za-z_]\w*$/.test(seg) ? '.' + seg : '["' + seg.replace(/"/g, '\\"') + '"]'; }
+  function jqPath(base, dotted) { return base + String(dotted).split('.').map(jqSeg).join(''); }
+  function jqFromDot(dotted) {
+    const p = jqPath('', dotted);
+    return p.charAt(0) === '.' ? p : '.' + p;
+  }
+
+  /* Espressione jq della sorgente di un input; `a` è l'attività che lo consuma. */
+  function inputExpr(plan, i, a) {
+    const s = X.source(i.source, plan);
     if (s.kind === 'none') return 'null';
     if (s.kind === 'literal') return JSON.stringify(s.value);
+    if (s.kind === 'system') return s.path === 'offerta.prodotti' ? (a ? targetsExpr(a) : '$context.activeProducts') : (a && X.perProduct(a) ? '$product' : 'null');
     if (s.kind === 'result') {
       const src = X.findActivity(plan, s.ref);
-      return '$context.esiti.' + (src ? src.activityId : s.ref) + '.' + s.field;
+      const id = src ? src.activityId : s.ref;
+      if (src && X.perProduct(src)) {
+        // il produttore ha girato una volta per prodotto: un consumatore "per prodotto" legge il risultato del proprio prodotto, gli altri la lista dei risultati
+        const byProduct = '($context.esitiByProduct[' + JSON.stringify(id) + '] // {})';
+        if (a && X.perProduct(a)) return jqPath('(' + byProduct + '[$product] // {})', s.field);
+        return '[' + byProduct + ' | .[] | ' + jqFromDot(s.field) + ']';
+      }
+      return jqPath('$context.esiti.' + id, s.field);
     }
-    return '$workflow.input.' + s.path;
+    return jqPath('$workflow.input', s.path);
   }
 
   /* URI dell'endpoint: i segmenti {param} del path diventano un'espressione che li sostituisce con il valore dell'input omonimo. */
@@ -29,7 +46,7 @@
     while ((m = re.exec(raw))) {
       const inp = a.input.find(function (x) { return x.name === m[1]; });
       parts.push(JSON.stringify(raw.slice(last, m.index)));
-      parts.push('((' + (inp ? inputExpr(plan, inp) : '$workflow.input.' + m[1]) + ') | tostring | @uri)');
+      parts.push('((' + (inp ? inputExpr(plan, inp, a) : '$workflow.input.' + m[1]) + ') | tostring | @uri)');
       last = re.lastIndex;
     }
     parts.push(JSON.stringify(raw.slice(last)));
@@ -53,20 +70,39 @@
   function bodyOf(plan, a) {
     const b = {};
     a.input.forEach(function (i) {
-      const s = X.source(i.source);
-      if (s.kind === 'none') b[i.name] = null;
-      else if (s.kind === 'literal') b[i.name] = s.value;
-      else b[i.name] = '${ ' + inputExpr(plan, i) + ' }';
+      const s = X.source(i.source, plan);
+      Fields.setPath(b, i.name, s.kind === 'none' ? null : s.kind === 'literal' ? s.value : '${ ' + inputExpr(plan, i, a) + ' }');
     });
     b.products = productsExpr(a);
     return b;
   }
 
-  /* Salva l'esito nel contesto e accumula i prodotti KO (letti dal gate e dai blocchi dipendenti). In export.as l'output del task è $output. */
+  /* Query string di una GET: gli input non già usati come parametri del path, più i prodotti. */
+  function queryOf(plan, a) {
+    const used = {};
+    (a.service.path || '').replace(/\{(\w+)\}/g, function (_, n) { used[n] = true; return ''; });
+    const q = {};
+    a.input.forEach(function (i) {
+      if (used[i.name]) return;
+      const s = X.source(i.source, plan);
+      if (s.kind === 'none') return;
+      q[i.name] = s.kind === 'literal' ? s.value : '${ ' + inputExpr(plan, i, a) + ' }';
+    });
+    q.products = X.perProduct(a) ? '${ $product }' : '${ ' + targetsExpr(a) + ' | join(",") }';
+    return q;
+  }
+
+  /*
+   * Salva l'esito nel contesto e accumula i prodotti KO (letti dal gate e dai blocchi dipendenti). In export.as l'output del task è $output.
+   * Per i blocchi "una chiamata per prodotto" l'esito è anche in esitiByProduct[blocco][prodotto], perché esiti[blocco] conserva solo l'ultimo.
+   */
   function exportResult(a) {
     const ko = '[($output.productOutcomes // {}) | to_entries[] | select(.value == "KO") | .key]';
+    const byProduct = X.perProduct(a)
+      ? ', esitiByProduct: (($context.esitiByProduct // {}) + { "' + a.activityId + '": (($context.esitiByProduct["' + a.activityId + '"] // {}) + { ($product): $output }) })'
+      : '';
     return {
-      as: '${ $context + { esiti: (($context.esiti // {}) + { "' + a.activityId + '": $output }), koProducts: ((($context.koProducts // []) + ' + ko + ') | unique), koByBlock: (($context.koByBlock // {}) + { "' + a.activityId + '": ((($context.koByBlock["' + a.activityId + '"] // []) + ' + ko + ') | unique) }) } }'
+      as: '${ $context + { esiti: (($context.esiti // {}) + { "' + a.activityId + '": $output }), koProducts: ((($context.koProducts // []) + ' + ko + ') | unique), koByBlock: (($context.koByBlock // {}) + { "' + a.activityId + '": ((($context.koByBlock["' + a.activityId + '"] // []) + ' + ko + ') | unique) })' + byProduct + ' } }'
     };
   }
 
@@ -111,7 +147,7 @@
     const k = X.kebab(a.activityId);
     const method = (a.service.method || 'POST').toLowerCase();
     const call = { call: 'http', with: { method: method, endpoint: { uri: endpointUri(plan, a) } } };
-    if (method === 'get') call.with.query = { products: X.perProduct(a) ? '${ $product }' : '${ ' + targetsExpr(a) + ' | join(",") }' };
+    if (method === 'get') call.with.query = queryOf(plan, a);
     else call.with.body = bodyOf(plan, a);
     if (!X.isAsync(a)) call.export = exportResult(a);
     let callItem = {};
@@ -163,7 +199,15 @@
   }
 
   function initTask(products) {
-    return { 'init-offer': { set: { activeProducts: products, koProducts: [], esiti: {} }, export: { as: '${ $output }' } } };
+    return { 'init-offer': { set: { activeProducts: products, koProducts: [], esiti: {}, esitiByProduct: {} }, export: { as: '${ $output }' } } };
+  }
+
+  /* Schema dell'input generale: dal modello della pratica; senza campi resta il vecchio schema pratica + cliente. pratica.id c'è sempre (correlazione degli eventi). */
+  function inputSchema(plan) {
+    const fields = plan.practice && plan.practice.fields || [];
+    if (!fields.length) return { type: 'object', required: ['pratica', 'cliente'], properties: { pratica: { type: 'object' }, cliente: { type: 'object' } } };
+    const all = fields.some(function (f) { return f.name === 'pratica.id'; }) ? fields : [{ name: 'pratica.id', type: 'string', required: true }].concat(fields);
+    return Fields.toSchema(all.map(function (f) { return f.name === 'pratica.id' ? Object.assign({}, f, { required: true }) : f; }));
   }
 
   function build(plan) {
@@ -180,13 +224,15 @@
         // il ramo "non atteso" è un sotto-workflow autonomo: riceve l'input originale + i prodotti attivi e ricostruisce il proprio contesto
         subflows.push({
           document: document(plan, sub, a.taskName + ' (non atteso)', 'Eseguito senza attesa dal gate dopo ' + st.name),
-          do: [{ 'init-branch': { set: { activeProducts: '${ $workflow.input.activeProducts }', koProducts: [], esiti: {} }, export: { as: '${ $output }' } } }, unit(plan, a)]
+          do: [{ 'init-branch': { set: { activeProducts: '${ $workflow.input.activeProducts }', koProducts: [], esiti: '${ $workflow.input.esiti // {} }', esitiByProduct: '${ $workflow.input.esitiByProduct // {} }' }, export: { as: '${ $output }' } } }, unit(plan, a)]
         });
         const t = {};
-        // lo schema vuole un oggetto: passo le radici dell'input originale che il ramo legge (pratica e cliente sempre) più i prodotti attivi
-        const roots = { pratica: true, cliente: true };
-        a.input.forEach(function (i) { const sr = X.source(i.source); if (sr.kind === 'path') roots[sr.path.split('.')[0]] = true; });
-        const subInput = { activeProducts: '${ $context.activeProducts }' };
+        // lo schema vuole un oggetto: passo le radici dell'input originale (modello della pratica) più prodotti attivi ed esiti già raccolti
+        const roots = { pratica: true };
+        ((plan.practice && plan.practice.roots) || []).forEach(function (r) { roots[r] = true; });
+        if (!plan.practice || !plan.practice.roots.length) roots.cliente = true;
+        a.input.forEach(function (i) { const sr = X.source(i.source, plan); if (sr.kind === 'path') roots[sr.path.split('.')[0]] = true; });
+        const subInput = { activeProducts: '${ $context.activeProducts }', esiti: '${ $context.esiti }', esitiByProduct: '${ $context.esitiByProduct }' };
         Object.keys(roots).forEach(function (r) { subInput[r] = '${ $workflow.input.' + r + ' }'; });
         t['start-' + X.kebab(a.activityId)] = { run: { workflow: { namespace: NS, name: sub, version: '1.0.0', input: subInput }, await: false }, metadata: blockMeta(plan, a, true) };
         tasks.push(t);
@@ -224,7 +270,7 @@
 
     const main = {
       document: document(plan, name, plan.offer.name, (plan.offer.description || '') + ' — generato da BPM AI Offer Designer'),
-      input: { schema: { format: 'json', document: { type: 'object', required: ['pratica', 'cliente'], properties: { pratica: { type: 'object' }, cliente: { type: 'object' } } } } },
+      input: { schema: { format: 'json', document: inputSchema(plan) } },
       do: doList
     };
     const meta = documentMeta(plan);

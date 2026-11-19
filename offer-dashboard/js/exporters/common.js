@@ -54,16 +54,12 @@
 
   /* ---------------- helper sul piano ---------------- */
   /*
-   * Classifica la sorgente di un input: risultato di un'altra attività (esiti.X.campo), percorso sulla
-   * memoria condivisa della pratica (es. cliente.codiceFiscale) oppure valore fisso (es. WELCOME_KIT).
+   * Classifica la sorgente di un input: risultato di un'altra attività (esiti.X.campo), sorgente di sistema,
+   * percorso nei dati della pratica (es. cliente.codiceFiscale) oppure valore fisso (es. WELCOME_KIT).
+   * Con il piano si riconoscono come percorsi solo quelli che partono da una radice del modello della pratica.
    */
-  function source(src) {
-    if (src == null || String(src).trim() === '') return { kind: 'none' };
-    const s = String(src).trim();
-    const m = /^esiti\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$/.exec(s);
-    if (m) return { kind: 'result', ref: m[1], field: m[2], path: s };
-    if (/^[A-Za-z_]\w*(\.\w+)+$/.test(s)) return { kind: 'path', path: s };
-    return { kind: 'literal', value: s };
+  function source(src, plan) {
+    return window.Fields.classify(src, plan && plan.practice ? plan.practice.roots : null);
   }
 
   /* Attività di uno step, separando quelle "non attese" (regola Non attendere del gate in uscita). */

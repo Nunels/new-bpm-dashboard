@@ -5,7 +5,7 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPTS = [
-  'js/vendor/js-yaml/js-yaml.min.js', 'js/seed.js', 'js/store.js', 'js/validation.js', 'js/simulator.js',
+  'js/vendor/js-yaml/js-yaml.min.js', 'js/seed.js', 'js/fields.js', 'js/store.js', 'js/validation.js', 'js/simulator.js',
   'js/exporters/common.js', 'js/exporters/serverless.js', 'js/exporters/temporal.js', 'js/execution-plan.js', 'js/dsl-import.js'
 ];
 

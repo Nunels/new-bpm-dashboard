@@ -89,6 +89,11 @@ public final class OfferSchema {
         return copy;
     }
 
+    /** Solo lo schema della config di un blocco (per le correzioni del controllo di copertura), nella versione per il modello. */
+    public ObjectNode configSchemaForModel() {
+        return ((ObjectNode) forModel().at("/properties/offer/properties/blocks/items/properties/config")).deepCopy();
+    }
+
     private static void strip(JsonNode n) {
         if (n.isObject()) {
             ObjectNode o = (ObjectNode) n;

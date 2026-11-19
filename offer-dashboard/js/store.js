@@ -135,8 +135,12 @@
       data.products = data.products || [];
       data.tasks = data.tasks || [];
       data.offers = data.offers || [];
+      // dati salvati prima del modello della pratica: lo ricavo dai percorsi usati dai task
+      if (!data.practice || !Array.isArray(data.practice.fields)) data.practice = window.Fields.inferPractice(data.tasks);
       data.tasks.forEach(function (t) {
         t.inputs = t.inputs || []; t.outputs = t.outputs || []; t.outcomes = t.outcomes || ['OK', 'KO'];
+        t.inputs.forEach(function (i) { i.type = i.type || 'string'; });
+        t.outputs.forEach(function (o) { o.type = o.type || 'string'; });
         t.compatibleProducts = t.compatibleProducts || []; t.allowedSteps = t.allowedSteps || [];
         t.api = t.api || { method: 'POST', path: '' }; t.extensions = t.extensions || { request: false, ko: false };
         t.defaults = t.defaults || {}; t.defaults.retry = t.defaults.retry || { count: 0, intervalSec: 0 };
