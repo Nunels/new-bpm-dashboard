@@ -69,7 +69,10 @@ public final class PromptBuilder {
                {"callMode": "perOffer", "retry": {"count": 2, "intervalSec": 30},
                 "koTask": {"enabled": true, "queue": "BO_ANTIFRODE", "slaHours": 8}}
                e per una comunicazione: {"inputMapping": {"template": "WELCOME_KIT"}}
-            8. Rispondi solo con il JSON conforme allo schema.
+            8. Completezza: crea un blocco per OGNI attività o servizio del catalogo che la specifica richiede, in ogni
+               step in cui è richiesto (un blocco per ogni elenco puntato o paragrafo di attività). Una risposta con pochi
+               blocchi per una specifica che ne descrive molti è incompleta.
+            9. Rispondi solo con il JSON conforme allo schema.
             """;
 
     private PromptBuilder() {
@@ -166,7 +169,10 @@ public final class PromptBuilder {
                 - task manuale su KO: koTask con enabled true, la coda e le ore di SLA indicate;
                 - template delle comunicazioni (inputMapping.template) e altri valori fissi richiesti;
                 - topic di callback dei task asincroni;
-                - prodotti del blocco, dipendenze e regole delle barre.
+                - prodotti del blocco, dipendenze e regole delle barre;
+                - blocchi MANCANTI: ogni attività o servizio che la specifica richiede e che esiste nel catalogo deve avere
+                  il suo blocco (nello step giusto). Se ne manca uno, restituisci una voce con blockId = id che il blocco
+                  dovrebbe avere (es. B_ORACOLO) e issue che indica task, step e prodotti, senza configPatch.
                 Non segnalare scelte non scritte nella specifica, né requisiti fuori catalogo già riportati in assumptions.
                 Per ogni differenza restituisci una voce con: blockId (id del blocco), issue (una frase: la specifica
                 richiede X, la configurazione ha Y) e, SOLO se la differenza riguarda un campo della config del blocco
