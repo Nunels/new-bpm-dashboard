@@ -16,13 +16,15 @@ COPY offer-agent/src/main offer-agent/src/main
 RUN mvn -B -q -f offer-agent/pom.xml -Dmaven.test.skip=true package
 
 FROM eclipse-temurin:17-jre
-RUN useradd --system --uid 10001 --no-create-home app
+# GraalJS (Truffle) estrae le sue librerie native in una cache utente: serve una home scrivibile
+RUN useradd --system --uid 10001 --create-home app
 WORKDIR /app
 COPY --from=build /src/offer-agent/target/quarkus-app/ ./
 USER app
 
 # Render imposta PORT (default 10000). La chiave del modello va in GEMINI_API_KEY, mai nell'immagine.
 ENV PORT=10000 \
-    JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC"
+    JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseSerialGC" \
+    XDG_CACHE_HOME=/tmp/cache
 EXPOSE 10000
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar quarkus-run.jar"]
