@@ -1,0 +1,9 @@
+**/target
+**/node_modules
+**/.git
+**/.env
+**/.env.*
+**/.idea
+**/.vscode
+offer-dashboard/tests
+quarkus-flow-sim
