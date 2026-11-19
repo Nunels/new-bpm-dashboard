@@ -7,7 +7,7 @@ Apri `generate.html` con doppio click (Edge/Chrome). Non serve un server per la 
 Al primo avvio vengono caricati i dati demo (prodotti Conto, Evo, Lib Min, TIM; task Oracolo, Oracolo 2, Pregiudizievoli, Cribis, ...; offerta d'esempio ricostruita dallo schizzo). "↺ Reset demo" li ripristina.
 
 ## Le pagine
-Nell'ordine del flusso di lavoro (barra in alto):
+Nell'ordine del flusso di lavoro (barra in alto). La pagina di configurazione usa tutta la larghezza per la timeline: i task del catalogo sono una barra di chip trascinabili sopra la griglia e i dettagli di blocco/barra stanno in un pannello in basso. Entrambi si comprimono (la preferenza resta salvata nel browser); il pannello si apre da solo alla selezione di un blocco o di una barra e si ridimensiona trascinandone il bordo superiore.
 
 | Pagina | Scopo |
 |---|---|
@@ -41,7 +41,9 @@ Il DSL viene poi generato dalla dashboard come sempre. Dettagli, modello e limit
   - su una riga prodotto di uno step → blocco per quel prodotto (se lo step contiene già lo stesso task, il prodotto viene aggiunto al blocco condiviso; con **Alt** si crea un blocco separato);
   - sull'intestazione dello step → blocco condiviso su tutti i prodotti compatibili (es. Oracolo per Conto/Evo/Lib Min);
   - trascina un blocco esistente su un altro step per spostarlo.
-- **Configurazione blocco** (pannello a destra): prodotti coinvolti, 1 chiamata per N prodotti vs 1 per prodotto, dipendenze "Esegui dopo" (sequenza nello step; senza dipendenze = parallelo), retry, mapping input sulla memoria condivisa della pratica, output, gestione esiti **OK / KO / KO con task manuale** (coda + SLA), notifiche mail, callback asincrona.
+  - **Prodotti non adiacenti:** se un blocco è su prodotti non contigui (es. Conto e Lib Min, senza Evo) viene disegnato come una scheda per ogni gruppo di righe adiacenti, unite da un riquadro tratteggiato che occupa solo le righe vuote dei prodotti esclusi. «1 chiamata × N» indica il numero reale di prodotti. Cliccando un segmento si seleziona tutto il blocco.
+  - Passando il mouse su un task del catalogo compare un tooltip con descrizione, modalità e prodotti compatibili (in verde quelli presenti nell'offerta).
+- **Configurazione blocco** (pannello in basso): prodotti coinvolti, 1 chiamata per N prodotti vs 1 per prodotto, dipendenze "Esegui dopo" (sequenza nello step; senza dipendenze = parallelo), retry, mapping input sulla memoria condivisa della pratica, output, gestione esiti **OK / KO / KO con task manuale** (coda + SLA), notifiche mail, callback asincrona.
 - **Barre regole (arancioni)** tra gli step, anche più di una per transizione. Regole:
   - *Non attendere: &lt;blocco&gt;* — si prosegue senza l'esito del blocco (es. Oracolo 2);
   - *Manda solo gli OK* — i prodotti KO escono, gli OK proseguono (default se non ci sono regole sui KO);

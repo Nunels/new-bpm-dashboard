@@ -16,6 +16,78 @@
   const dslDrafts = {};           // offerId -> testo DSL modificato e non ancora applicato
   let dslMessages = null;         // { kind: 'error'|'ok', items: [] }
 
+  /* stato dell'interfaccia (barra task, pannello dettagli): solo preferenze, non fanno parte dei dati dell'offerta */
+  const UI_KEY = 'offerDashboard.ui.v1';
+  const ui = (function () {
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { s = {}; }
+    return { paletteCollapsed: !!s.paletteCollapsed, panelCollapsed: s.panelCollapsed !== false, panelHeight: Number(s.panelHeight) > 0 ? Number(s.panelHeight) : 300 };
+  })();
+  function saveUi() {
+    try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* preferenze non salvate */ }
+  }
+  let panelAutoOpen = false;      // pannello aperto da una nuova selezione, a prescindere dalla preferenza salvata
+  let lastSelKey = null;
+
+  function panelIsCollapsed() { return ui.panelCollapsed && !(panelAutoOpen && selection); }
+
+  /* altezza massima del pannello: la timeline conserva almeno ~330px */
+  function panelMax() { return Math.max(160, Math.min(Math.round(window.innerHeight * 0.7), window.innerHeight - 330)); }
+
+  function applyPanelState() {
+    const key = selection ? selection.type + ':' + selection.id : null;
+    if (key && key !== lastSelKey) panelAutoOpen = true;   // una nuova selezione (clic o drop) apre il pannello
+    if (!key) panelAutoOpen = false;
+    lastSelKey = key;
+    const w = $('panelwrap');
+    const max = panelMax();
+    w.classList.toggle('collapsed', panelIsCollapsed());
+    w.style.setProperty('--panel-h', Math.min(Math.max(ui.panelHeight, 120), max) + 'px');
+    renderPanelBar();
+  }
+
+  function togglePanel() {
+    if (panelIsCollapsed()) { ui.panelCollapsed = false; } else { ui.panelCollapsed = true; panelAutoOpen = false; }
+    saveUi(); applyPanelState();
+  }
+
+  function renderPanelBar() {
+    const bar = $('panelbar'); bar.innerHTML = '';
+    const o = offer();
+    if (!o) return;
+    let title = 'Offerta: ' + o.name;
+    if (selection) {
+      const x = selection.type === 'block' ? o.blocks.find(function (b) { return b.id === selection.id; }) : o.gates.find(function (g) { return g.id === selection.id; });
+      if (x) title = selection.type === 'block' ? 'Blocco: ' + (Model.task(data, x.taskId) || { name: x.taskId }).name : 'Barra regole';
+    }
+    const v = validation;
+    const status = !v ? null : v.errors.length ? h('span', { class: 'pb-status err' }, '✖ ' + v.errors.length + (v.errors.length === 1 ? ' errore' : ' errori'))
+      : v.warnings.length ? h('span', { class: 'pb-status warn' }, '⚠ ' + v.warnings.length + (v.warnings.length === 1 ? ' avviso' : ' avvisi'))
+      : h('span', { class: 'pb-status ok' }, '✔ Nessun problema');
+    bar.append(
+      h('span', { class: 'pb-title' }, (panelIsCollapsed() ? '▸ ' : '▾ ') + 'Dettagli'), h('span', { class: 'muted' }, title), status,
+      h('div', { class: 'spacer' }),
+      h('button', { class: 'small', title: panelIsCollapsed() ? 'Espandi i dettagli' : 'Comprimi i dettagli', onclick: function (e) { e.stopPropagation(); togglePanel(); } }, panelIsCollapsed() ? '▴ Espandi' : '▾ Comprimi'));
+    bar.onclick = togglePanel;
+  }
+
+  /* maniglia per l'altezza del pannello */
+  function initPanelGrip() {
+    const grip = $('panel-resize');
+    grip.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      const move = function (ev) {
+        const max = panelMax();
+        ui.panelHeight = Math.min(Math.max(window.innerHeight - ev.clientY, 120), max);
+        $('panelwrap').style.setProperty('--panel-h', ui.panelHeight + 'px');
+      };
+      const up = function () { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); saveUi(); };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    window.addEventListener('resize', function () { applyPanelState(); });
+  }
+
   const $ = function (id) { return document.getElementById(id); };
   const offer = function () { return data.offers.find(function (o) { return o.id === offerId; }); };
   const pname = function (pid) { return Model.productName(data, pid); };
@@ -32,14 +104,15 @@
     if (view === 'model' && !modelOutput(o)) view = 'visual';
     if (view === 'dsl') { renderDsl(); return; }
     if (view === 'model') { renderModelJson(); return; }
-    renderPalette(); renderBoard(); renderPanel(); renderSimLog();
+    renderPalette(); renderBoard(); renderPanel(); applyPanelState(); renderSimLog();
   }
 
   function commit(level) {
     Store.save(data);
     const o = offer();
     validation = o ? Validation.validateOffer(data, o) : null;
-    if (level === 'all') { renderOfferbar(); renderBanner(); renderPalette(); renderPanel(); }
+    if (level === 'all') { renderOfferbar(); renderBanner(); renderPalette(); renderPanel(); applyPanelState(); }
+    else renderPanelBar();
     renderBoard(); renderSimLog();
   }
 
@@ -52,7 +125,11 @@
     render();
   }
 
-  function select(type, id) { selection = type ? { type: type, id: id } : null; renderBoard(); renderPanel(); }
+  function select(type, id) {
+    selection = type ? { type: type, id: id } : null;
+    applyPanelState();
+    renderBoard(); renderPanel();
+  }
 
   /* ---------- barra offerta ---------- */
   function renderOfferbar() {
@@ -87,15 +164,19 @@
   /* ---------- palette task ---------- */
   function renderPalette() {
     const p = $('palette'); p.innerHTML = '';
+    p.classList.toggle('collapsed', ui.paletteCollapsed);
     const list = h('div', { class: 'palette-list' });
+    const help = 'Trascina un task sulla riga di un prodotto, dentro uno step. Rilascialo sull\'intestazione dello step per assegnarlo a tutti i prodotti compatibili. Se lo step contiene già lo stesso task, il prodotto viene aggiunto al blocco esistente (tieni premuto Alt per crearne uno separato).';
     p.append(
-      h('h3', null, 'Task del catalogo'),
-      h('input', { type: 'search', placeholder: 'Cerca task…', value: paletteFilter, oninput: function (e) { paletteFilter = e.target.value; fillPalette(list); } }),
-      h('div', { class: 'hint' }, simMode
-        ? 'Modalità simulazione: scegli gli esiti dentro i blocchi.'
-        : 'Trascina un task sulla riga di un prodotto, dentro uno step. Rilascialo sull\'intestazione dello step per assegnarlo a tutti i prodotti compatibili. Se lo step contiene già lo stesso task, il prodotto viene aggiunto al blocco esistente (tieni premuto Alt per crearne uno separato).'),
-      list,
-      h('a', { href: 'catalog.html', class: 'link' }, 'Gestisci catalogo →'));
+      h('div', { class: 'palette-bar' },
+        h('h3', null, 'Task del catalogo'),
+        ui.paletteCollapsed ? null : h('input', { type: 'search', placeholder: 'Cerca task…', value: paletteFilter, oninput: function (e) { paletteFilter = e.target.value; fillPalette(list); } }),
+        ui.paletteCollapsed ? null : h('button', { class: 'help-q', title: help, onclick: function () { toast(help, 'ok'); } }, '?'),
+        simMode ? h('span', { class: 'palette-note' }, 'Modalità simulazione: scegli gli esiti dentro i blocchi.') : null,
+        h('a', { href: 'catalog.html', class: 'link' }, 'Gestisci catalogo →'),
+        h('div', { class: 'spacer' }),
+        h('button', { class: 'small', title: ui.paletteCollapsed ? 'Mostra i task' : 'Nascondi i task', onclick: function () { ui.paletteCollapsed = !ui.paletteCollapsed; saveUi(); renderPalette(); } }, ui.paletteCollapsed ? '▾ Mostra' : '▴ Nascondi')),
+      list);
     fillPalette(list);
   }
 
@@ -109,18 +190,41 @@
       const usable = !!o && t.compatibleProducts.some(function (p) { return o.products.indexOf(p) >= 0; });
       list.append(h('div', {
         class: 'palette-item' + (usable ? '' : ' disabled'), draggable: usable && !simMode,
-        title: (t.description || '') + (usable ? '' : '\nNessun prodotto compatibile nell\'offerta'),
-        ondragstart: function (e) { startDrag(e, { kind: 'task', id: t.id }); }, ondragend: endDrag
+        onmouseenter: function (e) { showTaskTip(e.currentTarget, t, o, usable); },
+        onmouseleave: hideTaskTip,
+        ondragstart: function (e) { hideTaskTip(); startDrag(e, { kind: 'task', id: t.id }); }, ondragend: endDrag
       },
         h('div', { class: 'pi-name' }, t.name),
         h('div', { class: 'pi-meta' },
           h('span', { class: 'badge ' + t.scope }, t.scope === 'common' ? 'common' : 'verticale'),
           h('span', { class: 'badge ' + t.type }, t.type),
-          h('span', { class: 'badge' }, t.callMode === 'perOffer' ? '1×N' : '1×prod')),
-        h('div', { class: 'pi-products' }, t.compatibleProducts.map(function (pid) {
-          return h('span', { class: 'mini' + (o && o.products.indexOf(pid) >= 0 ? ' on' : '') }, pname(pid));
-        }))));
+          h('span', { class: 'badge' }, t.callMode === 'perOffer' ? '1×N' : '1×prod'))));
     });
+  }
+
+  /* tooltip del task: descrizione, modalità e prodotti compatibili (in verde quelli presenti nell'offerta) */
+  let taskTip = null;
+  function hideTaskTip() { if (taskTip) { taskTip.remove(); taskTip = null; } }
+  function showTaskTip(anchor, t, o, usable) {
+    hideTaskTip();
+    const inOffer = function (pid) { return !!o && o.products.indexOf(pid) >= 0; };
+    const steps = (t.allowedSteps && t.allowedSteps.length ? t.allowedSteps : data.steps.map(function (s) { return s.id; }))
+      .map(function (id) { const s = Model.step(data, id); return s ? s.name : id; });
+    taskTip = h('div', { class: 'task-tip' },
+      h('div', { class: 'tt-title' }, t.name),
+      t.description ? h('div', { class: 'tt-desc' }, t.description) : null,
+      h('div', { class: 'tt-row' }, h('b', null, 'Tipo: '), (t.type === 'async' ? 'asincrono (callback)' : 'sincrono') + ' · ' + (t.scope === 'common' ? 'condiviso tra più prodotti' : 'verticale') + ' · ' + (t.callMode === 'perOffer' ? '1 chiamata per N prodotti' : '1 chiamata per prodotto')),
+      h('div', { class: 'tt-row' }, h('b', null, 'Prodotti compatibili:'),
+        h('div', { class: 'tt-prods' }, t.compatibleProducts.map(function (pid) {
+          return h('span', { class: 'tt-prod' + (inOffer(pid) ? ' on' : '') }, (inOffer(pid) ? '✓ ' : '') + pname(pid));
+        }))),
+      h('div', { class: 'tt-row' }, h('b', null, 'Step ammessi: '), steps.join(', ')),
+      t.api ? h('div', { class: 'tt-row' }, h('code', null, t.api.method + ' ' + t.api.path)) : null,
+      usable ? null : h('div', { class: 'tt-warn' }, 'Nessun prodotto compatibile nell\'offerta'));
+    document.body.appendChild(taskTip);
+    const r = anchor.getBoundingClientRect(), w = taskTip.offsetWidth;
+    taskTip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+    taskTip.style.top = (r.bottom + 6) + 'px';
   }
 
   /* ---------- griglia ---------- */
@@ -201,7 +305,7 @@
         }));
       });
 
-      layouts[s.id].placements.forEach(function (pl) { board.append(renderBlock(o, pl, p, errBlocks, warnBlocks)); });
+      layouts[s.id].placements.forEach(function (pl) { renderBlock(o, pl, p, errBlocks, warnBlocks).forEach(function (el) { board.append(el); }); });
 
       if (i < steps.length - 1) {
         const gc = pos['G:' + s.id];
@@ -260,31 +364,58 @@
     const c = b.config;
     const sel = selection && selection.type === 'block' && selection.id === b.id;
     const inOffer = b.products.filter(function (pid) { return o.products.indexOf(pid) >= 0; });
-    const cls = ['block'];
-    if (sel) cls.push('selected');
-    if (errBlocks.has(b.id)) cls.push('has-error'); else if (warnBlocks.has(b.id)) cls.push('has-warning');
-    if (t && t.type === 'async') cls.push('async');
-    const gappy = inOffer.length && (pl.re - pl.rs + 1) !== inOffer.length;
     const depNames = b.dependsOn.map(function (d) { const x = o.blocks.find(function (y) { return y.id === d; }); const tt = x && Model.task(data, x.taskId); return tt ? tt.name : d; });
-    return h('div', {
-      class: cls.join(' '),
-      style: { gridRow: (pl.rs + 2) + ' / ' + (pl.re + 3), gridColumn: String(p.start + pl.lane) },
-      draggable: !simMode,
-      ondragstart: function (e) { e.stopPropagation(); startDrag(e, { kind: 'block', id: b.id }); },
-      ondragend: endDrag,
-      onclick: function (e) { if (/SELECT|OPTION/.test(e.target.tagName)) return; select('block', b.id); }
-    },
-      h('div', { class: 'block-title' }, t ? t.name : b.taskId + ' (?)'),
-      h('div', { class: 'block-badges' },
-        inOffer.length > 1 ? h('span', { class: 'bb' }, c.callMode === 'perOffer' ? '1 chiamata × ' + inOffer.length : inOffer.length + ' chiamate') : null,
-        t && t.type === 'async' ? h('span', { class: 'bb' }, 'async') : null,
-        Number(c.retry.count) > 0 ? h('span', { class: 'bb' }, 'retry ' + c.retry.count) : null,
-        c.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0 ? h('span', { class: 'bb' }, 'KO→task') : null,
-        c.onKo === 'IGNORE' ? h('span', { class: 'bb' }, 'KO non bloccante') : null,
-        c.notify.onOk || c.notify.onKo ? h('span', { class: 'bb' }, '✉') : null),
-      depNames.length ? h('div', { class: 'block-deps' }, '↳ dopo ' + depNames.join(', ')) : null,
-      (gappy || (inOffer.length > 1 && !simMode)) ? h('div', { class: 'block-products' }, inOffer.map(function (pid) { return h('span', { class: 'mini on' }, pname(pid)); })) : null,
-      simMode ? simControls(o, b, t, inOffer) : null);
+
+    // un segmento per ogni gruppo di righe adiacenti: le righe dei prodotti esclusi restano vuote
+    const idx = inOffer.map(function (pid) { return o.products.indexOf(pid); }).sort(function (a, z) { return a - z; });
+    const groups = [];
+    idx.forEach(function (i) {
+      const g = groups[groups.length - 1];
+      if (g && i === g.end + 1) { g.end = i; g.products.push(o.products[i]); } else groups.push({ start: i, end: i, products: [o.products[i]] });
+    });
+    if (!groups.length) groups.push({ start: pl.rs, end: pl.re, products: [] });
+
+    const col = String(p.start + pl.lane);
+    const out = [];
+    groups.forEach(function (g, gi) {
+      const first = gi === 0;
+      const cls = ['block'];
+      if (sel) cls.push('selected');
+      if (first) { if (errBlocks.has(b.id)) cls.push('has-error'); else if (warnBlocks.has(b.id)) cls.push('has-warning'); }
+      else cls.push('continued');
+      if (t && t.type === 'async') cls.push('async');
+      const showProducts = g.products.length && (!simMode && (inOffer.length > 1));
+      out.push(h('div', {
+        class: cls.join(' '),
+        style: { gridRow: (g.start + 2) + ' / ' + (g.end + 3), gridColumn: col },
+        title: groups.length > 1 ? 'Stesso blocco su ' + inOffer.map(pname).join(', ') : null,
+        draggable: !simMode,
+        ondragstart: function (e) { e.stopPropagation(); startDrag(e, { kind: 'block', id: b.id }); },
+        ondragend: endDrag,
+        onclick: function (e) { if (/SELECT|OPTION/.test(e.target.tagName)) return; select('block', b.id); }
+      },
+        h('div', { class: 'block-title' }, t ? t.name : b.taskId + ' (?)'),
+        first ? h('div', { class: 'block-badges' },
+          inOffer.length > 1 ? h('span', { class: 'bb' }, c.callMode === 'perOffer' ? '1 chiamata × ' + inOffer.length : inOffer.length + ' chiamate') : null,
+          t && t.type === 'async' ? h('span', { class: 'bb' }, 'async') : null,
+          Number(c.retry.count) > 0 ? h('span', { class: 'bb' }, 'retry ' + c.retry.count) : null,
+          c.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0 ? h('span', { class: 'bb' }, 'KO→task') : null,
+          c.onKo === 'IGNORE' ? h('span', { class: 'bb' }, 'KO non bloccante') : null,
+          c.notify.onOk || c.notify.onKo ? h('span', { class: 'bb' }, '✉') : null) : h('div', { class: 'block-cont' }, '↑ stesso blocco'),
+        first && depNames.length ? h('div', { class: 'block-deps' }, '↳ dopo ' + depNames.join(', ')) : null,
+        showProducts ? h('div', { class: 'block-products' }, g.products.map(function (pid) { return h('span', { class: 'mini on' }, pname(pid)); })) : null,
+        simMode ? simControls(o, b, t, g.products) : null));
+      const next = groups[gi + 1];
+      if (next) {
+        // ponte tratteggiato nelle righe vuote tra due segmenti: stessa larghezza delle schede, le unisce
+        out.push(h('div', {
+          class: 'block-bridge' + (sel ? ' selected' : '') + (t && t.type === 'async' ? ' async' : ''),
+          style: { gridRow: (g.end + 3) + ' / ' + (next.start + 2), gridColumn: col },
+          title: 'Stesso blocco ' + (t ? t.name : b.taskId) + ': non include ' + o.products.slice(g.end + 1, next.start).map(pname).join(', ')
+        }));
+      }
+    });
+    return out;
   }
 
   const OUT_LABEL = { OK: 'OK', KO: 'KO', KO_TASK: 'KO + task', PENDING: 'In attesa' };
@@ -966,6 +1097,7 @@
   if (requested && data.offers.some(function (x) { return x.id === requested; })) offerId = requested;
   if (new URLSearchParams(location.search).get('view') === 'dsl') view = 'dsl';
   $('btn-plan').addEventListener('click', showPlan);
+  initPanelGrip();
   $('btn-validate').addEventListener('click', function () {
     const o = offer(); if (!o) return;
     selection = null; render();
