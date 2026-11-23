@@ -18,7 +18,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Esegue in GraalJS il codice della dashboard (validazione, Execution Plan, exporter, importer DSL): lo stesso
+ * Esegue in GraalJS il codice della dashboard (validazione, Execution Plan, exporter DSL): lo stesso
  * codice che gira nel browser, copiato nel classpath a build time da ../offer-dashboard. Un contesto JS non è
  * thread-safe: le chiamate sono serializzate.
  */
@@ -26,8 +26,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class DashboardJs {
 
     static final List<String> SCRIPTS = List.of(
-            "js/vendor/js-yaml/js-yaml.min.js", "js/seed.js", "js/fields.js", "js/store.js", "js/validation.js", "js/simulator.js",
-            "js/exporters/common.js", "js/exporters/serverless.js", "js/exporters/temporal.js", "js/execution-plan.js", "js/dsl-import.js");
+            "js/vendor/js-yaml/js-yaml.min.js", "js/seed.js", "js/fields.js", "js/store.js", "js/conditions.js", "js/validation.js", "js/simulator.js",
+            "js/exporters/common.js", "js/exporters/serverless.js", "js/exporters/temporal.js", "js/execution-plan.js");
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PRELUDE = String.join("\n",
@@ -56,7 +56,7 @@ public class DashboardJs {
         }
     }
 
-    /** Analisi completa di un'offerta rispetto al catalogo: validazione, DSL, simulazione, andata e ritorno. */
+    /** Analisi completa di un'offerta rispetto al catalogo: validazione, DSL, simulazione. */
     public synchronized JsonNode analyze(JsonNode catalog, JsonNode offer) {
         Value fn = context.getBindings("js").getMember("analyzeOffer");
         return read(fn.execute(catalog.toString(), offer.toString()).asString());

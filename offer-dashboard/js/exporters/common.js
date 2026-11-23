@@ -74,7 +74,8 @@
       });
       if (main.length) stages.push({ stage: st.stage, execution: main.length > 1 ? 'PARALLEL' : 'SINGLE', activities: main });
     });
-    return { stages: stages, detached: detached };
+    const mainActs = [].concat.apply([], stages.map(function (s) { return s.activities; }));
+    return { stages: stages, detached: detached, branches: window.Model.branches(mainActs, function (a) { return a.activityId; }) };
   }
 
   /* Attività riferita da esiti.<X>.<campo>: X può essere l'id del blocco o l'id del task. */

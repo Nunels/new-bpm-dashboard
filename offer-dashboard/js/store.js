@@ -72,8 +72,13 @@
     DONT_WAIT: { label: 'Non attendere', short: 'NON ATTENDERE', desc: 'Non attendere l\'esito del blocco indicato: i prodotti proseguono e l\'esito viene gestito in asincrono.', needsBlock: true },
     ONLY_OK: { label: 'Manda solo gli OK', short: 'SOLO OK', desc: 'I prodotti con esito KO escono dall\'offerta, gli OK proseguono.' },
     STOP_ON_KO: { label: 'Ferma tutto se ci sono KO', short: 'STOP SE KO', desc: 'Se almeno un prodotto (eventualmente tra quelli indicati) è KO, l\'intera offerta si ferma.', hasProducts: true },
-    CONTINUE_ON_KO: { label: 'Prosegui anche con KO', short: 'PROSEGUI', desc: 'Tutti i prodotti proseguono anche se hanno esito KO.' }
+    CONTINUE_ON_KO: { label: 'Prosegui anche con KO', short: 'PROSEGUI', desc: 'Tutti i prodotti proseguono anche se hanno esito KO.' },
+    ROUTE: { label: 'Instrada se…', short: 'INSTRADA', desc: 'Se la condizione è vera la pratica salta a un altro step (anche precedente: ripete lo step, al massimo N volte) oppure si ferma. Si valuta prima delle altre regole del gate; le regole sono provate nell\'ordine.', hasRoute: true }
   };
+
+  /* Instradamento di un gate: iterazioni di default e massime (la history di un workflow Temporal non è illimitata). */
+  const MAX_ITERATIONS_DEFAULT = 3;
+  const MAX_ITERATIONS_LIMIT = 10;
 
   const OUTCOMES = {
     OK: 'OK',
@@ -83,6 +88,8 @@
 
   const Model = {
     RULE_TYPES: RULE_TYPES,
+    MAX_ITERATIONS_DEFAULT: MAX_ITERATIONS_DEFAULT,
+    MAX_ITERATIONS_LIMIT: MAX_ITERATIONS_LIMIT,
     OUTCOMES: OUTCOMES,
     task: function (data, id) { return data.tasks.find(function (t) { return t.id === id; }); },
     product: function (data, id) { return data.products.find(function (p) { return p.id === id; }); },
@@ -144,6 +151,8 @@
         t.compatibleProducts = t.compatibleProducts || []; t.allowedSteps = t.allowedSteps || [];
         t.api = t.api || { method: 'POST', path: '' }; t.extensions = t.extensions || { request: false, ko: false };
         t.defaults = t.defaults || {}; t.defaults.retry = t.defaults.retry || { count: 0, intervalSec: 0 };
+        // lista dei risultati per prodotto: la risposta contiene una lista con un elemento per prodotto (campo prodotto + campo esito)
+        t.productResults = t.productResults && t.productResults.list ? Object.assign({ productField: 'prodotto', outcomeField: 'esito', ok: ['OK'], koTask: [] }, t.productResults) : null;
       });
       data.offers.forEach(function (o) {
         o.products = o.products || []; o.blocks = o.blocks || []; o.gates = o.gates || [];
@@ -159,7 +168,19 @@
             async: Object.assign(def.async, c.async || {})
           });
         });
-        o.gates.forEach(function (g) { g.rules = g.rules || []; g.note = g.note || ''; });
+        o.gates.forEach(function (g) {
+          g.rules = g.rules || []; g.note = g.note || '';
+          g.rules.forEach(function (r) {
+            if (r.type !== 'ROUTE') return;
+            r.when = r.when && Array.isArray(r.when.clauses) ? r.when : { join: 'AND', clauses: [] };
+            r.when.join = r.when.join === 'OR' ? 'OR' : 'AND';
+            r.to = r.to || '';
+            if (r.to !== 'STOP') {
+              r.maxIterations = Number(r.maxIterations) > 0 ? Math.floor(Number(r.maxIterations)) : MAX_ITERATIONS_DEFAULT;
+              r.onExceed = r.onExceed === 'CONTINUE' ? 'CONTINUE' : 'STOP';
+            }
+          });
+        });
       });
       return data;
     },
@@ -190,6 +211,112 @@
       return { levels: levels.filter(Boolean), cycle: cycle };
     },
 
+    /*
+     * Rami di uno step: le componenti connesse delle dipendenze ("Esegui dopo"). Una componente in cui ogni blocco ha al più un
+     * genitore è un albero (kind 'tree': radice + figli annidati); se c'è un join (blocco con più genitori) o un ciclo resta
+     * un gruppo a livelli (kind 'levels'), in cui si attende l'intero livello prima del successivo.
+     * `idOf` permette di usarla anche sulle attività del piano (id = activityId); i nodi riportano l'elemento originale in `ref`.
+     */
+    branches: function (items, idOf) {
+      idOf = idOf || function (b) { return b.id; };
+      const wraps = items.map(function (b) { return { id: idOf(b), ref: b, dependsOn: [] }; });
+      const byId = {};
+      wraps.forEach(function (w) { byId[w.id] = w; });
+      wraps.forEach(function (w) { w.dependsOn = (w.ref.dependsOn || []).filter(function (d) { return byId[d] && d !== w.id; }); });
+      const comp = {};
+      const find = function (x) { while (comp[x] !== x) { comp[x] = comp[comp[x]]; x = comp[x]; } return x; };
+      wraps.forEach(function (w) { comp[w.id] = w.id; });
+      wraps.forEach(function (w) { w.dependsOn.forEach(function (d) { comp[find(w.id)] = find(d); }); });
+      const groups = [];
+      wraps.forEach(function (w) {
+        const r = find(w.id);
+        let g = groups.find(function (x) { return x.key === r; });
+        if (!g) { g = { key: r, wraps: [] }; groups.push(g); }
+        g.wraps.push(w);
+      });
+      return groups.map(function (g) {
+        const single = g.wraps.every(function (w) { return w.dependsOn.length <= 1; });
+        const roots = g.wraps.filter(function (w) { return !w.dependsOn.length; });
+        if (single && roots.length === 1) {
+          const node = function (w) { return { ref: w.ref, children: g.wraps.filter(function (c) { return c.dependsOn[0] === w.id; }).map(node) }; };
+          return { kind: 'tree', root: node(roots[0]), items: g.wraps.map(function (w) { return w.ref; }) };
+        }
+        const lv = Model.levels(g.wraps).levels;
+        return { kind: 'levels', levels: lv.map(function (l) { return l.map(function (w) { return w.ref; }); }), items: g.wraps.map(function (w) { return w.ref; }) };
+      });
+    },
+
+  /*
+   * Colonne = livelli di esecuzione dello step (sequenza "Esegui dopo"). I blocchi paralleli stanno nella stessa colonna.
+   * Corsie: ogni ramo ha la propria; un figlio sta sulla corsia del genitore se è libera, un join (più genitori) si
+   * allunga sulle corsie di tutti i suoi genitori quando sono libere nella sua colonna. Dentro una riga prodotto le corsie
+   * realmente usate diventano sotto-righe (rankTop/rankBot = posizione di inizio/fine del blocco); se la riga ha una sola
+   * corsia il blocco occupa tutta la riga. `laneCount[r]` = corsie usate nella riga prodotto r.
+   */
+  layoutStep: function (o, stepId) {
+    const blocks = Model.blocksInStep(o, stepId);
+    const levels = Model.levels(blocks).levels.map(function (l) { return l.slice(); });
+    const ids = blocks.map(function (b) { return b.id; });
+    const parentsOf = function (b) { return (b.dependsOn || []).filter(function (d) { return ids.indexOf(d) >= 0; }); };
+    // dentro un livello i figli seguono l'ordine dei genitori; i join per ultimi, così trovano libere le corsie dei genitori
+    for (let li = 1; li < levels.length; li++) {
+      const prev = [].concat.apply([], levels.slice(0, li)).map(function (b) { return b.id; });
+      const rank = function (b) {
+        const ps = parentsOf(b).map(function (d) { return prev.indexOf(d); }).filter(function (i) { return i >= 0; });
+        return ps.length ? Math.min.apply(null, ps) : 1e6;
+      };
+      levels[li] = levels[li].map(function (b, i) { return { b: b, i: i, r: rank(b), j: parentsOf(b).length > 1 ? 1 : 0 }; })
+        .sort(function (x, y) { return x.j - y.j || x.r - y.r || x.i - y.i; }).map(function (x) { return x.b; });
+    }
+    const lane = {};
+    const placements = [];
+    levels.forEach(function (level, li) {
+      const occ = [];
+      const free = function (k, rs, re) { return !(occ[k] || []).some(function (r) { return !(re < r[0] || rs > r[1]); }); };
+      level.forEach(function (b) {
+        const idx = b.products.map(function (p) { return o.products.indexOf(p); }).filter(function (i) { return i >= 0; });
+        const rs = idx.length ? Math.min.apply(null, idx) : 0;
+        const re = idx.length ? Math.max.apply(null, idx) : 0;
+        const ps = parentsOf(b).filter(function (d) { return lane[d]; });
+        let k0 = null, k1 = null;
+        if (ps.length > 1) {
+          const lo = Math.min.apply(null, ps.map(function (d) { return lane[d].k0; })), hi = Math.max.apply(null, ps.map(function (d) { return lane[d].k1; }));
+          let ok = true;
+          for (let k = lo; k <= hi; k++) if (!free(k, rs, re)) ok = false;
+          if (ok) { k0 = lo; k1 = hi; }
+        }
+        if (k0 === null && ps.length) {
+          const pref = Math.min.apply(null, ps.map(function (d) { return lane[d].k0; }));
+          if (free(pref, rs, re)) { k0 = pref; k1 = pref; }
+        }
+        if (k0 === null) { let k = 0; while (!free(k, rs, re)) k++; k0 = k1 = k; }
+        for (let k = k0; k <= k1; k++) (occ[k] = occ[k] || []).push([rs, re]);
+        lane[b.id] = { k0: k0, k1: k1 };
+        placements.push({ block: b, lane: li, rs: rs, re: re, k0: k0, k1: k1 });
+      });
+    });
+    const laneCount = {}, ranks = {};
+    for (let r = 0; r < o.products.length; r++) {
+      const used = [];
+      placements.forEach(function (p) {
+        if (r < p.rs || r > p.re) return;
+        for (let k = p.k0; k <= p.k1; k++) if (used.indexOf(k) < 0) used.push(k);
+      });
+      used.sort(function (a, z) { return a - z; });
+      laneCount[r] = Math.max(used.length, 1);
+      ranks[r] = used;
+    }
+    placements.forEach(function (p) {
+      p.laneCount = laneCount;
+      p.rankTop = {}; p.rankBot = {};
+      for (let r = p.rs; r <= p.re; r++) {
+        p.rankTop[r] = Math.max((ranks[r] || []).indexOf(p.k0), 0);
+        p.rankBot[r] = Math.max((ranks[r] || []).indexOf(p.k1), 0);
+      }
+    });
+    return { lanes: Math.max(levels.length, 1), placements: placements, laneCount: laneCount };
+  },
+
     /* Politica effettiva di una transizione, combinando le regole di tutti i gate (in ordine). */
     effectivePolicy: function (gates) {
       const rules = [];
@@ -210,9 +337,20 @@
       };
     },
 
+    /* Regole ROUTE di un gate (tutti i gate della transizione, in ordine). */
+    routesAfter: function (offer, stepId) {
+      const r = [];
+      Model.gatesAfter(offer, stepId).forEach(function (g) { g.rules.forEach(function (x, i) { if (x.type === 'ROUTE') r.push({ gate: g, rule: x, index: i, key: g.id + '-' + i }); }); });
+      return r;
+    },
+
     ruleText: function (data, offer, r) {
       const t = RULE_TYPES[r.type];
       if (!t) return r.type;
+      if (r.type === 'ROUTE') {
+        const dest = r.to === 'STOP' ? 'ferma l\'offerta' : (r.to ? (Model.step(data, r.to) || { name: r.to }).name : '(destinazione?)');
+        return 'Se ' + (window.Conditions.describe(data, offer, r.when) || '(condizione?)') + ' → ' + dest + (r.to === 'STOP' ? '' : ' (max ' + r.maxIterations + ' volte)');
+      }
       if (r.type === 'DONT_WAIT') return 'Non attendere: ' + (r.blockId ? Model.blockLabel(data, offer, r.blockId) : '(blocco?)');
       if (r.type === 'STOP_ON_KO' && r.products && r.products.length) return 'Ferma tutto se KO su: ' + r.products.map(function (p) { return Model.productName(data, p); }).join(', ');
       return t.label;

@@ -21,11 +21,10 @@ Il modello non scrive il DSL: produce un JSON piccolo e controllabile, e il DSL 
 | Id di blocchi e barre univoci | errore → correzione |
 | Validazione della dashboard: compatibilità task/prodotto, step, dipendenze circolari o tra step, regole che puntano a blocchi inesistenti, coda mancante per "KO con task" | errori → correzione; avvisi → WARNING |
 | DSL generato: schema ufficiale DSL 1.0.0 e perimetro dell'interprete Temporal | errore |
-| DSL riconvertibile nella stessa offerta (andata e ritorno) | errore |
 | Simulazione con tutti gli esiti OK: deve arrivare a COMPLETED | avviso |
 | `assumptions` del modello: scelte fatte dove la specifica era ambigua, o richieste fuori catalogo | avvisi |
 
-Validazione, export e importer sono **il codice JavaScript della dashboard** eseguito in GraalJS (copiato nel classpath a build time da `../offer-dashboard`): una sola fonte di verità, nessuna riscrittura in Java. Il perimetro del DSL usa `DefinitionValidator` di `temporal-offer-interpreter`.
+Validazione ed export sono **il codice JavaScript della dashboard** eseguito in GraalJS (copiato nel classpath a build time da `../offer-dashboard`): una sola fonte di verità, nessuna riscrittura in Java. Il perimetro del DSL usa `DefinitionValidator` di `temporal-offer-interpreter`. Lo stesso controllo (`DslChecks`) verifica anche il DSL dei blocchi condizionali e degli instradamenti dei gate configurati dalla dashboard (`DslChecksTest`); l'agente non genera né condizioni né instradamenti.
 
 ## Modello
 - API REST **interactions** di Gemini con `response_format` JSON Schema (https://ai.google.dev/gemini-api/docs/structured-output), header `Api-Revision: 2026-05-20`.

@@ -1,0 +1,97 @@
+@startuml temporal-code-vs-config-driven
+title Temporal: code-driven classico vs config-driven con interprete
+
+skinparam shadowing false
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 14
+skinparam ArrowFontSize 12
+skinparam rectangle {
+  RoundCorner 12
+  BorderColor #5B6B7B
+}
+skinparam package {
+  BorderColor #5B6B7B
+  FontStyle bold
+}
+skinparam note {
+  BackgroundColor #FFF8E1
+  BorderColor #C98A00
+}
+
+package "A. Code-driven classico" as A #F7F7F7 {
+  rectangle "**Nuova offerta / modifica**\nrichiesta all'analista" as A1 #FFFFFF
+  rectangle "**Sviluppatore Java**\nscrive un Workflow\nper ogni offerta" as A2 #FDE7E3
+  rectangle "**Build, test, release**\nnuovo artefatto del worker" as A3 #FDE7E3
+  rectangle "**Deploy dei worker**\n+ versioning del codice\nper i workflow in corso" as A4 #FDE7E3
+  rectangle "**Temporal**\nesegue il workflow" as A5 #E7F0F6
+  A1 -down-> A2
+  A2 -down-> A3
+  A3 -down-> A4
+  A4 -down-> A5
+}
+
+package "B. Config-driven con interprete" as B #F7F7F7 {
+  rectangle "**Nuova offerta / modifica**\nrichiesta all'analista" as B1 #FFFFFF
+  rectangle "**Dashboard + agente AI**\nl'analista configura l'offerta\n(prodotti, step, regole)" as B2 #E3F4E8
+  rectangle "**DSL (YAML)**\nServerless Workflow\nversionato e validato" as B3 #E3F4E8
+  rectangle "**Pubblicazione**\nnessun deploy di codice" as B4 #E3F4E8
+  rectangle "**Interprete generico**\nun solo Workflow Java\nche legge il DSL" as B5 #FFF4D6
+  rectangle "**Temporal**\nesegue l'interprete" as B6 #E7F0F6
+  B1 -down-> B2
+  B2 -down-> B3
+  B3 -down-> B4
+  B4 -down-> B5
+  B5 -down-> B6
+}
+
+note left of A
+  Ogni cambio = codice + deploy.
+  Serve uno sviluppatore Temporal.
+  L'offerta vive nel codice.
+
+  Un workflow per ogni offerta:
+  <code>
+  @WorkflowInterface
+  public interface OffertaContoTim { @WorkflowMethod void run(Pratica p); }
+
+  public class OffertaContoTimImpl implements OffertaContoTim {
+    public void run(Pratica p) {
+      // step: verifiche preliminari
+      Esito oracolo = act.oracolo(p, List.of("CONTO", "EVO"));
+      Esito oracolo2 = act.oracolo2(p, "TIM");
+      // barra: se c'è un KO si ferma tutto
+      if (oracolo.hasKo()) throw ApplicationFailure.newFailure("KO", "stop");
+      // step: verifiche BO ... (altro codice per ogni regola)
+    }
+  }
+  </code>
+end note
+
+note right of B
+  Ogni cambio = nuova configurazione.
+  Il codice cambia solo per nuove capacità
+  (nuovi tipi di task, nuove regole).
+  L'offerta vive in un file leggibile e verificabile.
+
+  L'offerta è un file (DSL), il codice è sempre lo stesso:
+  <code>
+  # offerta-conto-tim.sw.yaml
+  do:
+    - step-preliminari:
+        do:
+          - oracolo:  { call: http, with: { endpoint: /oracolo/v1/check } }
+          - oracolo2: { call: http, with: { endpoint: /oracolo2/v1/check } }
+    - gate-preliminari:
+        switch:
+          - stop: { when: "${ koProducts | length > 0 }", then: offer-stopped }
+
+  // interprete generico, uno per tutte le offerte
+  public RunResult run(RunRequest req) {
+    var definition = load(req.definitionRef());
+    return interpreter.execute(definition, req.input());
+  }
+  </code>
+end note
+
+A -[hidden]right- B
+@enduml

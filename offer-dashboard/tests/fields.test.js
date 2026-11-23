@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { load } = require('./harness');
 
 const ctx = load();
-const { Store, Model, Fields, DslImport, Exporters } = ctx;
+const { Store, Model, Fields, Exporters } = ctx;
 
 const clone = function (x) { return JSON.parse(JSON.stringify(x)); };
 
@@ -112,7 +112,7 @@ test('autoMap: solo corrispondenze univoche per nome', function () {
 test('DSL: body annidato, output per prodotto, sorgenti di sistema, query GET e schema di input', function () {
   const data = scenario();
   const offer = data.offers[0];
-  const main = DslImport.exportMain(data, offer);
+  const main = Exporters.buildServerless(ctx.ExecutionPlan.build(data, offer)).main;
   const yaml = Exporters.toYaml(main);
   const text = JSON.stringify(main);
   // il consumatore "per offerta" legge la lista dei risultati del produttore "per prodotto"

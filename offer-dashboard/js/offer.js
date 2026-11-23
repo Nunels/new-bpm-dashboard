@@ -8,13 +8,13 @@
   let selection = null;           // { type: 'block' | 'gate', id }
   let simMode = false;
   const simOutcomes = {};         // offerId -> blockId -> productId -> esito
+  const simScenario = {};         // offerId -> { practice, outputs }: dati usati dalle condizioni nella simulazione
+  const simRecover = {};          // offerId -> true: dopo un ritorno indietro tutti i blocchi rieseguiti rispondono OK
   let validation = null;
   let lastSim = null;
   let dragPayload = null;         // { kind: 'task' | 'block', id }
   let paletteFilter = '';
-  let view = 'visual';            // 'visual' | 'dsl' | 'model'
-  const dslDrafts = {};           // offerId -> testo DSL modificato e non ancora applicato
-  let dslMessages = null;         // { kind: 'error'|'ok', items: [] }
+  let view = 'visual';            // 'visual' | 'graph' | 'model'
 
   /* stato dell'interfaccia (barra task, pannello dettagli): solo preferenze, non fanno parte dei dati dell'offerta */
   const UI_KEY = 'offerDashboard.ui.v1';
@@ -97,12 +97,12 @@
     if (!offer()) offerId = data.offers.length ? data.offers[0].id : null;
     const o = offer();
     validation = o ? Validation.validateOffer(data, o) : null;
-    renderOfferbar(); renderBanner();
+    renderOfferbar(); renderBanner(); paintSimButton();
     $('visualview').classList.toggle('hidden', view !== 'visual');
-    $('dslview').classList.toggle('hidden', view !== 'dsl');
+    $('graphview').classList.toggle('hidden', view !== 'graph');
     $('modelview').classList.toggle('hidden', view !== 'model');
     if (view === 'model' && !modelOutput(o)) view = 'visual';
-    if (view === 'dsl') { renderDsl(); return; }
+    if (view === 'graph') { renderGraphView(); return; }
     if (view === 'model') { renderModelJson(); return; }
     renderPalette(); renderBoard(); renderPanel(); applyPanelState(); renderSimLog();
   }
@@ -118,10 +118,8 @@
 
   function setView(v) {
     if (v === view) return;
-    if (v === 'dsl' && simMode) simMode = false;
-    if (v === 'model' && simMode) simMode = false;
+    if (v !== 'visual' && simMode) simMode = false;
     view = v;
-    dslMessages = null;
     render();
   }
 
@@ -154,9 +152,8 @@
       h('div', { class: 'spacer' }),
       o ? h('div', { class: 'viewtabs' },
         h('button', { class: 'tab' + (view === 'visual' ? ' active' : ''), onclick: function () { setView('visual'); } }, '▦ Visuale'),
-        h('button', { class: 'tab' + (view === 'dsl' ? ' active' : '') + (dslDrafts[offerId] ? ' draft' : ''), title: dslDrafts[offerId] ? 'Bozza DSL non applicata' : '', onclick: function () { setView('dsl'); } }, '{ } DSL' + (dslDrafts[offerId] ? ' •' : '')),
-        modelOutput(o) ? h('button', { class: 'tab' + (view === 'model' ? ' active' : ''), title: 'Risposta JSON del modello (sola lettura)', onclick: function () { setView('model'); } }, '🤖 JSON modello') : null) : null,
-      o && view === 'visual' ? h('button', { class: 'sim-toggle' + (simMode ? ' active' : ''), onclick: toggleSim }, simMode ? '■ Esci dalla simulazione' : '▶ Simulazione') : null
+        h('button', { class: 'tab' + (view === 'graph' ? ' active' : ''), title: 'Grafo del processo (sola lettura)', onclick: function () { setView('graph'); } }, '⬡ Grafo'),
+        modelOutput(o) ? h('button', { class: 'tab' + (view === 'model' ? ' active' : ''), title: 'Risposta JSON del modello (sola lettura)', onclick: function () { setView('model'); } }, '🤖 JSON modello') : null) : null
     ];
     items.flat(Infinity).forEach(function (x) { if (x) bar.append(x); });
   }
@@ -228,32 +225,48 @@
   }
 
   /* ---------- griglia ---------- */
-  function layoutStep(o, stepId) {
-    const blocks = Model.blocksInStep(o, stepId);
-    const levels = Model.levels(blocks).levels;
-    const placements = [];
-    let laneBase = 0;
-    levels.forEach(function (level) {
-      const lanes = [];
-      level.forEach(function (b) {
-        const idx = b.products.map(function (p) { return o.products.indexOf(p); }).filter(function (i) { return i >= 0; });
-        const rs = idx.length ? Math.min.apply(null, idx) : 0;
-        const re = idx.length ? Math.max.apply(null, idx) : 0;
-        let k = 0;
-        while (lanes[k] && lanes[k].some(function (r) { return !(re < r[0] || rs > r[1]); })) k++;
-        (lanes[k] = lanes[k] || []).push([rs, re]);
-        placements.push({ block: b, lane: laneBase + k, rs: rs, re: re });
-      });
-      laneBase += Math.max(lanes.length, 1);
-    });
-    return { lanes: Math.max(laneBase, 1), placements: placements };
+  /* Ultimo passaggio nello step: con i ritorni indietro uno step può essere eseguito più volte. */
+  function simStep(stepId) {
+    if (!lastSim) return null;
+    const all = lastSim.steps.filter(function (s) { return s.stepId === stepId; });
+    return all.length ? all[all.length - 1] : null;
   }
 
-  function simStep(stepId) { return lastSim ? lastSim.steps.find(function (s) { return s.stepId === stepId; }) : null; }
+  function simulate(o) {
+    return Simulator.run(data, o, simOutcomes[o.id] || {}, ensureScenario(o), { recoverAfterLoop: !!simRecover[o.id] });
+  }
+
+  /* Riferimenti a pratica e output usati dalle condizioni dell'offerta (blocchi e instradamenti). */
+  function conditionLefts(o) {
+    const lefts = [];
+    const add = function (when) { if (Conditions.isActive(when)) when.clauses.forEach(function (c) { if (c.left && lefts.indexOf(c.left) < 0) lefts.push(c.left); }); };
+    o.blocks.forEach(function (b) { add(b.config.when); });
+    o.gates.forEach(function (g) { g.rules.forEach(function (r) { if (r.type === 'ROUTE') add(r.when); }); });
+    return lefts;
+  }
+
+  /* Dati dello scenario: parte da ciò che l'utente ha scritto e aggiunge i campi letti dalle condizioni (vuoti). */
+  function ensureScenario(o) {
+    const sc = simScenario[o.id] = simScenario[o.id] || { practice: {}, outputs: {} };
+    conditionLefts(o).forEach(function (left) {
+      const k = Conditions.leftKind(left);
+      const type = Conditions.leftType(data, o, left);
+      const blank = type === 'number' || type === 'integer' ? 0 : type === 'boolean' ? false : type === 'array' ? [] : '';
+      if (k.kind === 'path' && Fields.getPath(sc.practice, k.path) === undefined) Fields.setPath(sc.practice, k.path, blank);
+      if (k.kind === 'result') {
+        const src = Fields.resolveBlock(o, k.ref);
+        if (src) {
+          sc.outputs[src.id] = sc.outputs[src.id] || {};
+          if (Fields.getPath(sc.outputs[src.id], k.field) === undefined) Fields.setPath(sc.outputs[src.id], k.field, blank);
+        }
+      }
+    });
+    return sc;
+  }
 
   function renderBoard() {
     const board = $('board'); board.innerHTML = '';
-    board.className = 'board' + (simMode ? ' sim' : '');
+    board.className = 'board' + (simMode ? ' sim' : '') + (selection && selection.type === 'block' && !simMode ? ' focus' : '');
     const o = offer();
     lastSim = null;
     if (!o) {
@@ -261,25 +274,37 @@
       board.append(h('div', { class: 'empty' }, 'Nessuna offerta. Crea una nuova offerta con "+ Nuova".'));
       return;
     }
-    if (simMode) lastSim = Simulator.run(data, o, simOutcomes[o.id] || {});
+    if (simMode) lastSim = simulate(o);
     const steps = data.steps, prods = o.products, n = Math.max(prods.length, 1);
     const refSet = function (list, type) { return new Set(list.filter(function (e) { return e.ref && e.ref.type === type; }).map(function (e) { return e.ref.id; })); };
     const errBlocks = refSet(validation.errors, 'block'), warnBlocks = refSet(validation.warnings, 'block');
     const errGates = refSet(validation.errors, 'gate');
 
+    const focusSel = !!(selection && selection.type === 'block' && !simMode);
     const cols = ['170px'], pos = {}, layouts = {};
     let c = 2;
     steps.forEach(function (s, i) {
-      const L = layoutStep(o, s.id);
+      const L = Model.layoutStep(o, s.id);
       layouts[s.id] = L;
       pos[s.id] = { start: c, span: L.lanes };
-      for (let k = 0; k < L.lanes; k++) cols.push('minmax(165px, 1fr)');
+      for (let k = 0; k < L.lanes; k++) cols.push(focusSel ? 'minmax(225px, 1fr)' : 'minmax(165px, 1fr)');
       c += L.lanes;
       if (i < steps.length - 1) { pos['G:' + s.id] = c; cols.push('150px'); c++; }
     });
     board.style.gridTemplateColumns = cols.join(' ');
-    board.style.gridTemplateRows = 'auto repeat(' + n + ', minmax(' + (simMode ? 112 : 92) + 'px, auto)) auto';
-    const footRow = n + 2;
+
+    // ogni riga prodotto ha tante sotto-righe quante sono le corsie usate dai rami (al massimo tra gli step)
+    const sub = [];
+    for (let r = 0; r < n; r++) sub.push(1);
+    steps.forEach(function (s) {
+      for (let r = 0; r < n; r++) sub[r] = Math.max(sub[r], layouts[s.id].laneCount[r] || 1);
+    });
+    const rowStart = [];
+    let totalRows = 0;
+    sub.forEach(function (x) { rowStart.push(2 + totalRows); totalRows += x; });
+    const grid = { sub: sub, rowStart: rowStart };
+    board.style.gridTemplateRows = 'auto repeat(' + totalRows + ', minmax(' + (simMode ? 112 : 92) + 'px, auto)) auto';
+    const footRow = totalRows + 2;
 
     board.append(h('div', { class: 'corner', style: { gridRow: 1, gridColumn: 1 } }, 'Prodotti \\ Step'));
 
@@ -300,12 +325,12 @@
         }
         board.append(h('div', {
           class: 'cell' + (r % 2 ? ' odd' : '') + (st ? ' st-' + st : ''),
-          style: { gridRow: r + 2, gridColumn: p.start + ' / span ' + p.span },
+          style: { gridRow: rowStart[r] + ' / span ' + sub[r], gridColumn: p.start + ' / span ' + p.span },
           ondragover: allowDrop, ondragleave: leaveDrop, ondrop: function (e) { dropOnCell(e, s.id, pid); }
         }));
       });
 
-      layouts[s.id].placements.forEach(function (pl) { renderBlock(o, pl, p, errBlocks, warnBlocks).forEach(function (el) { board.append(el); }); });
+      layouts[s.id].placements.forEach(function (pl) { renderBlock(o, pl, p, errBlocks, warnBlocks, grid).forEach(function (el) { board.append(el); }); });
 
       if (i < steps.length - 1) {
         const gc = pos['G:' + s.id];
@@ -313,17 +338,17 @@
         const verdict = ss && ss.gate;
         board.append(h('div', { class: 'gate-head', style: { gridRow: 1, gridColumn: gc } },
           simMode ? null : h('button', { class: 'small', onclick: function () { addGate(s.id); }, title: 'Aggiungi una barra di regole' }, '+ barra')));
-        board.append(h('div', { class: 'gate-col', style: { gridRow: '2 / span ' + n, gridColumn: gc } },
+        board.append(h('div', { class: 'gate-col', style: { gridRow: '2 / span ' + totalRows, gridColumn: gc } },
           gates.length ? gates.map(function (g, gi) {
             const sel = selection && selection.type === 'gate' && selection.id === g.id;
             return h('div', {
-              class: 'gate' + (sel ? ' selected' : '') + (errGates.has(g.id) ? ' has-error' : ''),
+              class: 'gate' + (sel ? ' selected' : '') + (errGates.has(g.id) ? ' has-error' : '') + (g.rules.some(function (r) { return r.type === 'ROUTE'; }) ? ' has-route' : ''),
               title: g.rules.map(function (r) { return Model.ruleText(data, o, r); }).join('\n') || 'Nessuna regola',
               onclick: function () { select('gate', g.id); }
-            }, h('span', { class: 'gate-n' }, gi + 1));
+            }, h('span', { class: 'gate-n' }, gi + 1), g.rules.some(function (r) { return r.type === 'ROUTE'; }) ? h('span', { class: 'gate-route-mark' }, '↩') : null);
           }) : h('div', { class: 'gate ghost', title: 'Nessuna regola: default "Manda solo gli OK". Clicca per configurare', onclick: function () { if (!simMode) addGate(s.id); } }),
           verdict ? h('div', { class: 'verdict v-' + verdict.verdict.toLowerCase(), title: verdict.text },
-            ({ PASS: '➜ passa', WAIT: '⏸ attesa', STOP: '⛔ stop' })[verdict.verdict]) : null));
+            ({ PASS: '➜ passa', WAIT: '⏸ attesa', STOP: '⛔ stop', ROUTE: '↩ ritorna' })[verdict.verdict]) : null));
         board.append(h('div', { class: 'gate-foot', style: { gridRow: footRow, gridColumn: gc } },
           gates.length ? gates.map(function (g, gi) {
             return h('div', { class: 'gate-rule-text', onclick: function () { select('gate', g.id); } },
@@ -347,7 +372,7 @@
         else { txt = '✖ escluso in ' + (last ? Model.step(data, last.stepId).name : '—'); cls = 'ko'; }
         badge = h('div', { class: 'prod-status ' + cls }, txt);
       }
-      board.append(h('div', { class: 'prod-label' + (r % 2 ? ' odd' : ''), style: { gridRow: r + 2, gridColumn: 1 } },
+      board.append(h('div', { class: 'prod-label' + (r % 2 ? ' odd' : ''), style: { gridRow: rowStart[r] + ' / span ' + sub[r], gridColumn: 1 } },
         h('div', { class: 'prod-name' }, pname(pid)),
         simMode ? badge : h('div', { class: 'prod-actions' },
           h('button', { class: 'icon', title: 'Su', disabled: r === 0, onclick: function () { moveProduct(pid, -1); } }, '▲'),
@@ -357,38 +382,134 @@
 
     if (!prods.length) board.append(h('div', { class: 'empty-row', style: { gridRow: 2, gridColumn: '1 / -1' } }, 'L\'offerta non ha prodotti: aggiungili dalla barra in alto ("+ Aggiungi prodotto…").'));
     board.append(h('div', { class: 'foot-label', style: { gridRow: footRow, gridColumn: 1 } }, 'Regole di passaggio'));
+    drawArrows();
   }
 
-  function renderBlock(o, pl, p, errBlocks, warnBlocks) {
+  /* Ruolo di un blocco rispetto al blocco selezionato: 'parent' (da cui dipende), 'child' (dipende da lui) oppure 'other'; null senza selezione. */
+  function roleToSelection(b) {
+    if (!selection || selection.type !== 'block' || simMode) return null;
+    if (selection.id === b.id) return 'self';
+    const o = offer();
+    const sel = o && o.blocks.find(function (x) { return x.id === selection.id; });
+    if (!sel) return null;
+    if ((sel.dependsOn || []).indexOf(b.id) >= 0) return 'parent';
+    if ((b.dependsOn || []).indexOf(sel.id) >= 0) return 'child';
+    return 'other';
+  }
+
+  /* Frecce tra il blocco selezionato, i suoi genitori (arancioni) e i suoi figli (verdi): overlay SVG calcolato sulle posizioni reali delle schede. */
+  function drawArrows() {
+    const board = $('board');
+    const old = board.querySelector('.rel-arrows');
+    if (old) old.remove();
+    if (!selection || selection.type !== 'block' || simMode) return;
+    const o = offer();
+    const sel = o && o.blocks.find(function (x) { return x.id === selection.id; });
+    if (!sel) return;
+    const base = board.getBoundingClientRect();
+    const cardsOf = function (id) { return Array.prototype.slice.call(board.querySelectorAll('.block[data-block="' + id + '"]')); };
+    const selCards = cardsOf(sel.id);
+    if (!selCards.length) return;
+    const mid = function (r) { return r.top + r.height / 2; };
+    const nearest = function (cards, y) {
+      return cards.map(function (c) { return c.getBoundingClientRect(); }).sort(function (a, z) { return Math.abs(mid(a) - y) - Math.abs(mid(z) - y); })[0];
+    };
+    const paths = [];
+    const used = {};
+    // gomito ortogonale: esce dal lato destro del genitore, corre nel varco tra le colonne ed entra dal lato sinistro del figlio
+    const link = function (from, to, color, marker) {
+      const x1 = from.right - base.left, y1 = mid(from) - base.top, x2 = to.left - base.left, y2 = mid(to) - base.top;
+      let d;
+      if (x2 - x1 < 16) {
+        const dx = 30;
+        d = 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2;
+      } else if (Math.abs(y2 - y1) < 3) {
+        d = 'M' + x1 + ',' + y1 + ' L' + (x2 - 2) + ',' + y2;
+      } else {
+        const key = Math.round((x1 + x2) / 2 / 20);
+        const n = used[key] = (used[key] || 0) + 1;
+        const gap = x2 - x1;
+        const shift = Math.max(-gap / 2 + 14, Math.min(gap / 2 - 14, (n % 2 ? 1 : -1) * Math.ceil((n - 1) / 2) * 8));
+        const mx = (x1 + x2) / 2 + shift;
+        const sgn = y2 > y1 ? 1 : -1;
+        const r = Math.min(10, Math.abs(y2 - y1) / 2, Math.abs(mx - x1), Math.abs(x2 - mx));
+        d = 'M' + x1 + ',' + y1 + ' H' + (mx - r) + ' Q' + mx + ',' + y1 + ' ' + mx + ',' + (y1 + sgn * r) +
+          ' V' + (y2 - sgn * r) + ' Q' + mx + ',' + y2 + ' ' + (mx + r) + ',' + y2 + ' H' + (x2 - 2);
+      }
+      paths.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" marker-end="url(#' + marker + ')"/>' +
+        '<circle cx="' + x1 + '" cy="' + y1 + '" r="4.5" fill="' + color + '" stroke="#fff" stroke-width="1.5"/>');
+    };    (sel.dependsOn || []).forEach(function (d) {
+      const pc = cardsOf(d); if (!pc.length) return;
+      const to = nearest(selCards, mid(pc[0].getBoundingClientRect()) );
+      link(nearest(pc, mid(to)), to, '#e07b39', 'arr-o');
+    });
+    o.blocks.filter(function (x) { return (x.dependsOn || []).indexOf(sel.id) >= 0; }).forEach(function (ch) {
+      const cc = cardsOf(ch.id); if (!cc.length) return;
+      const from = nearest(selCards, mid(cc[0].getBoundingClientRect()));
+      link(from, nearest(cc, mid(from)), '#2e8b57', 'arr-g');
+    });
+    if (!paths.length) return;
+    const w = board.scrollWidth, hh = board.scrollHeight;
+    board.insertAdjacentHTML('beforeend', '<svg class="rel-arrows" xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + hh + '" viewBox="0 0 ' + w + ' ' + hh + '"><defs>' +
+      '<marker id="arr-o" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e07b39"/></marker>' +
+      '<marker id="arr-g" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2e8b57"/></marker></defs>' + paths.join('') + '</svg>');
+  }
+  function renderBlock(o, pl, p, errBlocks, warnBlocks, grid) {
     const b = pl.block, t = Model.task(data, b.taskId);
     const c = b.config;
     const sel = selection && selection.type === 'block' && selection.id === b.id;
     const inOffer = b.products.filter(function (pid) { return o.products.indexOf(pid) >= 0; });
     const depNames = b.dependsOn.map(function (d) { const x = o.blocks.find(function (y) { return y.id === d; }); const tt = x && Model.task(data, x.taskId); return tt ? tt.name : d; });
 
-    // un segmento per ogni gruppo di righe adiacenti: le righe dei prodotti esclusi restano vuote
+    // Un blocco occupa per intero la riga prodotto se la riga ha una sola corsia; altrimenti sta nelle sotto-righe della sua corsia
+    // (più corsie per un join). Le righe adiacenti si fondono in una sola scheda solo se i bordi combaciano.
     const idx = inOffer.map(function (pid) { return o.products.indexOf(pid); }).sort(function (a, z) { return a - z; });
-    const groups = [];
-    idx.forEach(function (i) {
-      const g = groups[groups.length - 1];
-      if (g && i === g.end + 1) { g.end = i; g.products.push(o.products[i]); } else groups.push({ start: i, end: i, products: [o.products[i]] });
-    });
-    if (!groups.length) groups.push({ start: pl.rs, end: pl.re, products: [] });
+    const inSet = {};
+    idx.forEach(function (i) { inSet[i] = true; });
+    const full = function (r) { return !(pl.laneCount[r] > 1); };
+    const top = function (r) { return full(r) ? 0 : pl.rankTop[r]; };
+    const bot = function (r) { return full(r) ? grid.sub[r] - 1 : pl.rankBot[r]; };
+    const runs = [];
+    for (let r = pl.rs; r <= pl.re; r++) {
+      const card = !idx.length || !!inSet[r];
+      const last = runs[runs.length - 1];
+      if (last && last.card === card && bot(r - 1) === grid.sub[r - 1] - 1 && top(r) === 0) {
+        last.end = r;
+        if (card && inSet[r]) last.products.push(o.products[r]);
+      } else runs.push({ card: card, start: r, end: r, products: card && inSet[r] ? [o.products[r]] : [] });
+    }
+    const rows = function (g) { return (grid.rowStart[g.start] + top(g.start)) + ' / ' + (grid.rowStart[g.end] + bot(g.end) + 1); };
+    const cards = runs.filter(function (g) { return g.card; });
 
     const col = String(p.start + pl.lane);
     const out = [];
-    groups.forEach(function (g, gi) {
-      const first = gi === 0;
+    runs.forEach(function (g, gi) {
+      if (!g.card) {
+        // ponte tratteggiato nelle righe dei prodotti esclusi: stessa larghezza delle schede, le unisce
+        out.push(h('div', {
+          class: 'block-bridge' + (sel ? ' selected' : '') + (roleToSelection(b) === 'other' ? ' dimmed' : '') + (t && t.type === 'async' ? ' async' : ''),
+          style: { gridRow: rows(g), gridColumn: col },
+          title: 'Stesso blocco ' + (t ? t.name : b.taskId) + ': non include ' + o.products.slice(g.start, g.end + 1).map(pname).join(', ')
+        }));
+        return;
+      }
+      const first = g === cards[0];
       const cls = ['block'];
       if (sel) cls.push('selected');
       if (first) { if (errBlocks.has(b.id)) cls.push('has-error'); else if (warnBlocks.has(b.id)) cls.push('has-warning'); }
       else cls.push('continued');
       if (t && t.type === 'async') cls.push('async');
+      const cond = Conditions.isActive(c.when);
+      if (cond) cls.push('conditional');
+      const role = roleToSelection(b);
+      if (role === 'parent' || role === 'child') cls.push('rel-' + role);
+      else if (role === 'other') cls.push('dimmed');
+      const isJoin = b.dependsOn.filter(function (d) { return o.blocks.some(function (x) { return x.id === d && x.stepId === b.stepId; }); }).length > 1;
       const showProducts = g.products.length && (!simMode && (inOffer.length > 1));
       out.push(h('div', {
-        class: cls.join(' '),
-        style: { gridRow: (g.start + 2) + ' / ' + (g.end + 3), gridColumn: col },
-        title: groups.length > 1 ? 'Stesso blocco su ' + inOffer.map(pname).join(', ') : null,
+        class: cls.join(' '), 'data-block': b.id,
+        style: { gridRow: rows(g), gridColumn: col },
+        title: cards.length > 1 ? 'Stesso blocco su ' + inOffer.map(pname).join(', ') : null,
         draggable: !simMode,
         ondragstart: function (e) { e.stopPropagation(); startDrag(e, { kind: 'block', id: b.id }); },
         ondragend: endDrag,
@@ -396,30 +517,23 @@
       },
         h('div', { class: 'block-title' }, t ? t.name : b.taskId + ' (?)'),
         first ? h('div', { class: 'block-badges' },
+          isJoin ? h('span', { class: 'bb join', title: 'Parte quando tutti i blocchi da cui dipende hanno finito' }, '⋈ JOIN') : null,
           inOffer.length > 1 ? h('span', { class: 'bb' }, c.callMode === 'perOffer' ? '1 chiamata × ' + inOffer.length : inOffer.length + ' chiamate') : null,
           t && t.type === 'async' ? h('span', { class: 'bb' }, 'async') : null,
           Number(c.retry.count) > 0 ? h('span', { class: 'bb' }, 'retry ' + c.retry.count) : null,
           c.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0 ? h('span', { class: 'bb' }, 'KO→task') : null,
           c.onKo === 'IGNORE' ? h('span', { class: 'bb' }, 'KO non bloccante') : null,
+          cond ? h('span', { class: 'bb cond', title: 'Eseguito solo se ' + Conditions.describe(data, o, c.when) }, 'SE …') : null,
           c.notify.onOk || c.notify.onKo ? h('span', { class: 'bb' }, '✉') : null) : h('div', { class: 'block-cont' }, '↑ stesso blocco'),
         first && depNames.length ? h('div', { class: 'block-deps' }, '↳ dopo ' + depNames.join(', ')) : null,
         showProducts ? h('div', { class: 'block-products' }, g.products.map(function (pid) { return h('span', { class: 'mini on' }, pname(pid)); })) : null,
         simMode ? simControls(o, b, t, g.products) : null));
-      const next = groups[gi + 1];
-      if (next) {
-        // ponte tratteggiato nelle righe vuote tra due segmenti: stessa larghezza delle schede, le unisce
-        out.push(h('div', {
-          class: 'block-bridge' + (sel ? ' selected' : '') + (t && t.type === 'async' ? ' async' : ''),
-          style: { gridRow: (g.end + 3) + ' / ' + (next.start + 2), gridColumn: col },
-          title: 'Stesso blocco ' + (t ? t.name : b.taskId) + ': non include ' + o.products.slice(g.end + 1, next.start).map(pname).join(', ')
-        }));
-      }
     });
     return out;
   }
 
   const OUT_LABEL = { OK: 'OK', KO: 'KO', KO_TASK: 'KO + task', PENDING: 'In attesa' };
-  const EFF_LABEL = { SKIPPED: 'non eseguito (dip. KO)', WAITING: 'attende dipendenza', NOT_ACTIVE: 'escluso prima', KO_IGNORED: 'KO ignorato' };
+  const EFF_LABEL = { SKIPPED: 'non eseguito (dip. KO)', SKIPPED_BY_CONDITION: 'saltato (condizione)', WAITING: 'attende dipendenza', NOT_ACTIVE: 'escluso prima', KO_IGNORED: 'KO ignorato' };
 
   function simControls(o, b, t, inOffer) {
     const ss = simStep(b.stepId);
@@ -633,6 +747,12 @@
 
   function toggleSim() { simMode = !simMode; render(); }
 
+  function paintSimButton() {
+    const b = $('btn-sim');
+    b.classList.toggle('active', simMode);
+    b.textContent = simMode ? '■ Esci dalla simulazione' : '▶ Simulazione';
+  }
+
   function setOutcome(oid, bid, pid, val) {
     simOutcomes[oid] = simOutcomes[oid] || {};
     simOutcomes[oid][bid] = simOutcomes[oid][bid] || {};
@@ -729,8 +849,19 @@
     const opt = function (s, group) { return h('option', { value: s.path, label: group + (s.label ? ' · ' + s.label : '') }); };
     const datalist = h('datalist', { id: listId },
       src.practice.map(function (s) { return opt(s, 'pratica'); }),
+      src.lists.map(function (s) { return opt(s, 'lista'); }),
       src.results.map(function (s) { return opt(s, 'output'); }),
       src.system.map(function (s) { return opt(s, 'sistema'); }));
+    // dentro una lista servono anche i campi dell'elemento (@.campo) e i dati del prodotto corrente
+    const rowList = function (i) {
+      if (!Fields.hasList(i.name)) return { id: listId, el: null };
+      const s = Fields.sources(data, o, b, i);
+      const id = listId + '-' + i.name.replace(/\W/g, '_');
+      return { id: id, el: h('datalist', { id: id },
+        s.items.map(function (x) { return opt(x, 'elemento'); }), s.perProduct.map(function (x) { return opt(x, 'prodotto'); }),
+        s.practice.map(function (x) { return opt(x, 'pratica'); }), s.lists.map(function (x) { return opt(x, 'lista'); }),
+        s.results.map(function (x) { return opt(x, 'output'); }), s.system.map(function (x) { return opt(x, 'sistema'); })) };
+    };
     const statusOf = function (i) { return Fields.status(data, o, b, i); };
     const total = t.inputs.length;
     const open = t.inputs.filter(function (i) { return statusOf(i).level === 'none'; }).length;
@@ -744,11 +875,12 @@
         return !f || i.name.toLowerCase().indexOf(f) >= 0 || String(c.inputMapping[i.name] || '').toLowerCase().indexOf(f) >= 0;
       });
       listEl.innerHTML = '';
-      rows.slice(0, MAX_ROWS).forEach(function (i) { listEl.append(mappingRow(i, c, statusOf, listId)); });
+      rows.slice(0, MAX_ROWS).forEach(function (i) { const rl = rowList(i); if (rl.el) listEl.append(rl.el); listEl.append(mappingRow(i, c, statusOf, rl.id)); });
       if (rows.length > MAX_ROWS) listEl.append(h('div', { class: 'muted' }, 'Altri ' + (rows.length - MAX_ROWS) + ' input: usa il filtro per cercarli.'));
       if (!rows.length) listEl.append(h('div', { class: 'muted' }, total ? 'Nessun input corrisponde al filtro.' : 'Nessun input definito nel catalogo.'));
     };
     fill();
+    const hasLists = t.inputs.some(function (i) { return Fields.isListRow(i.name); });
     return h('div', { class: 'psection' },
       h('h4', null, 'Input', total ? h('span', { class: 'muted' }, ' · ' + (total - open) + '/' + total + ' mappati') : null),
       total > 8 ? h('div', { class: 'map-tools' },
@@ -760,18 +892,93 @@
         toast(done.length ? done.length + ' input mappati automaticamente' : 'Nessuna corrispondenza univoca trovata');
       } }, '⚡ Mappa automaticamente') : null,
       datalist, listEl,
-      h('div', { class: 'field-hint' }, 'Sorgente: campo della pratica (es. cliente.codiceFiscale), output di un blocco già eseguito (esiti.<blocco>.<campo>), sorgente di sistema (offerta.prodotti, prodotto.id) oppure valore fisso.'));
+      hasLists ? h('details', { class: 'body-preview' }, h('summary', null, 'Struttura del body inviato'),
+        h('pre', { class: 'json' }, JSON.stringify(Fields.bodyShape(t, c.inputMapping), null, 2)),
+        h('div', { class: 'field-hint' }, 'Le liste hanno un elemento per ogni prodotto o per ogni elemento della lista d\'origine; qui è mostrato un solo elemento d\'esempio con la sorgente di ogni campo.')) : null,
+      h('div', { class: 'field-hint' }, 'Sorgente: campo della pratica (es. cliente.codiceFiscale), output di un blocco già eseguito (esiti.<blocco>.<campo>), sorgente di sistema (offerta.prodotti, prodotto.id) oppure valore fisso. Liste: la riga della lista indica l\'origine (offerta.prodotti = un elemento per prodotto, oppure es. pratica.spedizioni[]); dentro la lista @.campo è un campo dell\'elemento e prodotti.{prodotto}.campo il dato del prodotto.'));
   }
 
   function mappingRow(i, c, statusOf, listId) {
     const icon = h('span', { class: 'map-status' });
     const paint = function () { const st = statusOf(i); icon.className = 'map-status ' + st.level; icon.textContent = STATUS_ICON[st.level]; icon.title = st.msg; };
     paint();
-    return h('div', { class: 'map-row' },
-      h('div', { class: 'map-name' }, h('code', null, i.name), i.required ? h('span', { class: 'req' }, ' *') : null, h('span', { class: 'muted map-type' }, ' ' + (i.type || 'string'))),
+    const isList = Fields.isListRow(i.name);
+    const depth = (i.name.match(/\[\]/g) || []).length - (isList ? 1 : 0);
+    return h('div', { class: 'map-row' + (isList ? ' map-list-row' : ''), style: depth ? { marginLeft: depth * 14 + 'px' } : null },
+      h('div', { class: 'map-name' }, isList ? h('span', { class: 'bb list-badge' }, 'lista') : null, h('code', null, i.name), i.required ? h('span', { class: 'req' }, ' *') : null, h('span', { class: 'muted map-type' }, ' ' + (i.type || 'string'))),
       h('div', { class: 'map-input' },
-        h('input', { type: 'text', list: listId, value: c.inputMapping[i.name] || '', placeholder: 'campo, esiti.<blocco>.<campo> o valore fisso', onchange: function (e) { c.inputMapping[i.name] = e.target.value.trim(); paint(); commit('board'); } }),
+        h('input', { type: 'text', list: listId, value: c.inputMapping[i.name] || '', placeholder: isList ? 'origine: offerta.prodotti o un campo lista (es. pratica.spedizioni[])' : (Fields.hasList(i.name) ? '@.campo, prodotto.id, prodotti.{prodotto}.campo o valore fisso' : 'campo, esiti.<blocco>.<campo> o valore fisso'), onchange: function (e) { c.inputMapping[i.name] = e.target.value.trim(); paint(); commit('board'); } }),
         icon));
+  }
+
+  /* Editor di una condizione `holder[key]`: righe riferimento / operatore / valore, unite da E oppure OPPURE.
+   * ctx = { block } per un blocco, { stepId } per un gate: decide quali riferimenti sono disponibili. */
+  function conditionEditor(o, holder, key, ctx, required) {
+    const when = holder[key];
+    const refs = Conditions.references(data, o, ctx);
+    const groups = [['Dati della pratica', refs.practice], ['Esito di un blocco', refs.outcomes], ['Output di un blocco', refs.results], ['Sistema', refs.system]];
+    const known = function (path) { return groups.some(function (g) { return g[1].some(function (x) { return x.path === path; }); }); };
+    const clauses = when && when.clauses || [];
+    const ensure = function () { if (!holder[key]) holder[key] = Conditions.emptyWhen(); return holder[key]; };
+    const refSelect = function (c) {
+      return h('select', { class: 'cond-ref', value: c.left || '', onchange: function (e) {
+        c.left = e.target.value;
+        const isOutcome = Conditions.leftKind(c.left).kind === 'outcome';
+        const allowed = Conditions.opsFor(c.left, isOutcome);
+        if (allowed.indexOf(c.op) < 0) c.op = allowed[0];
+        if (isOutcome && Conditions.OUTCOME_VALUES.indexOf(c.value) < 0) c.value = 'KO';
+        commit('all');
+      } },
+        h('option', { value: '' }, '— riferimento —'),
+        c.left && !known(c.left) ? h('option', { value: c.left }, c.left + ' (non disponibile)') : null,
+        groups.filter(function (g) { return g[1].length; }).map(function (g) {
+          return h('optgroup', { label: g[0] }, g[1].map(function (x) { return h('option', { value: x.path }, x.type === 'outcome' ? x.label : x.path); }));
+        }));
+    };
+    const row = function (c, i) {
+      const outcome = Conditions.leftKind(c.left).kind === 'outcome';
+      const op = Conditions.OPS[c.op] || {};
+      const ops = Conditions.opsFor(c.left, outcome);
+      if (ops.indexOf(c.op) < 0) ops.unshift(c.op);
+      return h('div', { class: 'cond-row' },
+        refSelect(c),
+        h('select', { class: 'cond-op', value: c.op, onchange: function (e) { c.op = e.target.value; commit('all'); } },
+          ops.map(function (k) { return h('option', { value: k }, Conditions.OPS[k].label); })),
+        outcome
+          ? h('select', { class: 'cond-val', value: c.value || 'KO', onchange: function (e) { c.value = e.target.value; commit('all'); } }, Conditions.OUTCOME_VALUES.map(function (v) { return h('option', { value: v }, v); }))
+          : (op.unary ? h('span', { class: 'cond-val muted' }) : h('input', { type: 'text', class: 'cond-val', value: c.value == null ? '' : c.value, placeholder: op.list ? 'A, B, C' : (op.count ? 'numero' : 'valore'), onchange: function (e) { c.value = e.target.value; commit('all'); } })),
+        h('button', { class: 'icon danger', title: 'Rimuovi la clausola', onclick: function () {
+          clauses.splice(i, 1);
+          if (!clauses.length && !required) delete holder[key];
+          commit('all');
+        } }, '✕'));
+    };
+    const text = Conditions.describe(data, o, when);
+    return h('div', { class: 'cond' },
+      clauses.length ? clauses.map(row) : h('div', { class: 'muted' }, required ? 'Nessuna clausola: aggiungine almeno una.' : 'Nessuna condizione: il blocco viene sempre eseguito.'),
+      h('div', { class: 'cond-tools' },
+        h('button', { class: 'small', onclick: function () { ensure().clauses.push(Conditions.emptyClause()); commit('all'); } }, '+ Condizione'),
+        clauses.length > 1 ? h('select', { class: 'cond-join', value: when.join, onchange: function (e) { when.join = e.target.value; commit('all'); } },
+          h('option', { value: 'AND' }, 'devono valere tutte (E)'), h('option', { value: 'OR' }, 'basta una (OPPURE)')) : null),
+      text ? h('div', { class: 'field-hint' }, text) : null);
+  }
+
+  function whenSection(o, b) {
+    const active = Conditions.isActive(b.config.when);
+    return section('Condizione (esegui solo se)',
+      conditionEditor(o, b.config, 'when', { block: b }),
+      h('div', { class: 'field-hint' }, 'Se la condizione non è vera il blocco viene saltato: non è un KO e i blocchi che dipendono da lui partono comunque.'),
+      active ? h('button', { class: 'small', title: 'Duplica il blocco con la condizione opposta, per costruire un ramo A oppure B', onclick: function () { createElseBlock(o, b); } }, '↔ Crea il ramo «Altrimenti»') : null);
+  }
+
+  function createElseBlock(o, b) {
+    const nb = Util.clone(b);
+    nb.id = Util.uniqueId(b.id + '_ALTRIMENTI', o.blocks.map(function (x) { return x.id; }));
+    nb.config.when = Conditions.negate(b.config.when);
+    o.blocks.push(nb);
+    selection = { type: 'block', id: nb.id };
+    toast('Creato il ramo «Altrimenti» con la condizione opposta', 'ok');
+    commit('all');
   }
 
   function blockPanel(o, b) {
@@ -813,6 +1020,7 @@
         })) : h('div', { class: 'muted' }, 'Nessun altro blocco nello step.'),
           'Senza dipendenze i blocchi dello step girano in parallelo.'),
         h('div', { class: 'row2' }, field('Retry (tentativi)', num(c.retry, 'count')), field('Intervallo retry (s)', num(c.retry, 'intervalSec')))),
+      whenSection(o, b),
       mappingSection(o, b, t),
       section('Output',
         t.outputs.length ? t.outputs.slice(0, 15).map(function (x) {
@@ -843,10 +1051,37 @@
         h('button', { class: 'danger', onclick: function () { removeBlock(b.id); } }, '🗑 Elimina')));
   }
 
-  function newRule(type) {
+  function newRule(type, gate) {
     if (type === 'DONT_WAIT') return { type: type, blockId: '' };
     if (type === 'STOP_ON_KO') return { type: type, products: [] };
+    if (type === 'ROUTE') return { type: type, when: Conditions.emptyWhen(), to: gate ? gate.afterStep : '', maxIterations: Model.MAX_ITERATIONS_DEFAULT, onExceed: 'STOP' };
     return { type: type };
+  }
+
+  /* Destinazione e limiti di un instradamento (la condizione è nell'editor condiviso). */
+  function routeEditor(o, g, r) {
+    const si = Model.stepIndex(data, g.afterStep);
+    const dest = Model.stepIndex(data, r.to);
+    const back = r.to !== 'STOP' && dest >= 0 && dest <= si;
+    return h('div', { class: 'route' },
+      h('div', { class: 'field-label' }, 'Se'),
+      conditionEditor(o, r, 'when', { stepId: g.afterStep }, true),
+      field('Allora',
+        h('select', { value: r.to || '', onchange: function (e) {
+          r.to = e.target.value;
+          if (r.to === 'STOP') { delete r.maxIterations; delete r.onExceed; }
+          else { r.maxIterations = r.maxIterations || Model.MAX_ITERATIONS_DEFAULT; r.onExceed = r.onExceed || 'STOP'; }
+          commit('all');
+        } },
+          h('option', { value: '' }, '— destinazione —'),
+          data.steps.map(function (s, i) { return h('option', { value: s.id }, (i <= si ? '↩ torna a ' : '⤳ salta a ') + s.name + (i === si ? ' (ripeti questo step)' : '')); }),
+          h('option', { value: 'STOP' }, '⛔ ferma l\'offerta')),
+        back ? 'Il ritorno riesegue lo step di destinazione (e quelli successivi) per i prodotti ancora in corsa, KO compresi. Si valuta prima delle altre regole del gate.'
+          : r.to === 'STOP' ? 'L\'offerta si ferma con errore.' : 'Salta gli step intermedi per i prodotti che superano il gate (dopo le regole sui KO).'),
+      back ? h('div', { class: 'row2' },
+        field('Massimo ritorni (1-' + Model.MAX_ITERATIONS_LIMIT + ')', h('input', { type: 'number', min: 1, max: Model.MAX_ITERATIONS_LIMIT, value: r.maxIterations, onchange: function (e) { r.maxIterations = Math.floor(Number(e.target.value)) || 0; commit('all'); } })),
+        field('Oltre il massimo', h('select', { value: r.onExceed || 'STOP', onchange: function (e) { r.onExceed = e.target.value; commit('all'); } },
+          h('option', { value: 'STOP' }, 'ferma l\'offerta'), h('option', { value: 'CONTINUE' }, 'prosegui con le altre regole')))) : null);
   }
 
   function gatePanel(o, g) {
@@ -866,7 +1101,7 @@
         g.rules.length ? g.rules.map(function (r, ri) {
           return h('div', { class: 'rule' },
             h('div', { class: 'rule-head' },
-              h('select', { value: r.type, onchange: function (e) { g.rules[ri] = newRule(e.target.value); commit('all'); } },
+              h('select', { value: r.type, onchange: function (e) { g.rules[ri] = newRule(e.target.value, g); commit('all'); } },
                 Object.keys(RT).map(function (k) { return h('option', { value: k }, RT[k].label); })),
               h('button', { class: 'icon danger', title: 'Rimuovi regola', onclick: function () { g.rules.splice(ri, 1); commit('all'); } }, '✕')),
             h('div', { class: 'field-hint' }, RT[r.type] ? RT[r.type].desc : ''),
@@ -877,14 +1112,15 @@
               return h('label', { class: 'check inline' },
                 h('input', { type: 'checkbox', checked: (r.products || []).indexOf(pid) >= 0, onchange: function (e) { r.products = r.products || []; toggleIn(r.products, pid, e.target.checked); commit('all'); } }),
                 pname(pid));
-            }))) : null);
+            }))) : null,
+            r.type === 'ROUTE' ? routeEditor(o, g, r) : null);
         }) : h('div', { class: 'muted' }, 'Nessuna regola in questa barra.'),
         h('div', { class: 'add-rule' }, Object.keys(RT).map(function (k) {
-          return h('button', { class: 'small', onclick: function () { g.rules.push(newRule(k)); commit('all'); } }, '+ ' + RT[k].label);
+          return h('button', { class: 'small', onclick: function () { g.rules.push(newRule(k, g)); commit('all'); } }, '+ ' + RT[k].label);
         }))),
       section('Nota', h('textarea', { rows: 2, value: g.note || '', placeholder: 'Motivazione / riferimento requisito', onchange: function (e) { g.note = e.target.value; Store.save(data); } })),
       section('Comportamento effettivo della transizione',
-        h('ul', { class: 'help' }, ExecutionPlan.describePolicy(data, o, pol).map(function (d) { return h('li', null, d); }))),
+        h('ul', { class: 'help' }, ExecutionPlan.describePolicy(data, o, pol, g.afterStep).map(function (d) { return h('li', null, d); }))),
       h('div', { class: 'panel-actions' },
         h('button', { onclick: function () { select(null); } }, '← Offerta'),
         idx > 0 ? h('button', { onclick: function () { moveGate(g, -1); } }, '◀ Prima') : null,
@@ -893,20 +1129,39 @@
   }
 
   /* ---------------- simulazione: log ---------------- */
+  let scenarioOpen = false;
+
   function renderSimLog() {
     const el = $('simlog'); el.innerHTML = '';
     if (!simMode || !lastSim) { el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
+    const o = offer();
     const f = lastSim.final;
     const label = { COMPLETED: '✔ Completato', STOPPED: '⛔ Fermato', WAITING: '⏸ In attesa', FAILED: '✖ Nessun prodotto completato', NO_PRODUCTS: '— Nessun prodotto' }[f.status];
+    const hasRoute = o.gates.some(function (g) { return g.rules.some(function (r) { return r.type === 'ROUTE'; }); });
+    const lefts = conditionLefts(o);
+    const scenarioArea = lefts.length ? h('details', { class: 'sim-scenario', open: scenarioOpen, ontoggle: function (e) { scenarioOpen = e.target.open; } },
+      h('summary', null, 'Dati dello scenario per le condizioni (' + lefts.length + ' campi letti)'),
+      h('textarea', { rows: 8, spellcheck: 'false', value: JSON.stringify(ensureScenario(o), null, 2), onchange: function (e) {
+        try {
+          const v = JSON.parse(e.target.value);
+          if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('deve essere un oggetto { practice, outputs }');
+          simScenario[o.id] = { practice: v.practice || {}, outputs: v.outputs || {} };
+          renderBoard(); renderSimLog();
+        } catch (err) { toast('JSON dello scenario non valido: ' + err.message, 'error'); }
+      } }),
+      h('div', { class: 'field-hint' }, 'practice = dati della pratica; outputs = output dei blocchi (per id blocco). Le condizioni sui campi non indicati risultano false.')) : null;
     el.append(
       h('div', { class: 'simlog-head' },
         h('b', null, 'Simulazione'),
         h('span', { class: 'sim-final f-' + f.status.toLowerCase() }, label),
         h('span', { class: 'sim-msg' }, f.message),
         h('div', { class: 'spacer' }),
+        hasRoute ? h('label', { class: 'check', title: 'Dopo un ritorno indietro i blocchi rieseguiti rispondono tutti OK (simula la correzione del problema)' },
+          h('input', { type: 'checkbox', checked: !!simRecover[o.id], onchange: function (e) { simRecover[o.id] = e.target.checked; renderBoard(); renderSimLog(); } }), 'dopo un ritorno: tutto OK') : null,
         h('button', { class: 'small', onclick: function () { delete simOutcomes[offerId]; renderBoard(); renderSimLog(); } }, 'Tutti OK'),
         h('button', { class: 'small', onclick: randomScenario }, '🎲 Scenario casuale')),
+      scenarioArea,
       h('div', { class: 'simlog-body' }, lastSim.log.map(function (l) { return h('div', { class: 'log' + (l.kind ? ' log-' + l.kind : '') }, l.msg); })));
   }
 
@@ -915,96 +1170,45 @@
     const fallback = function () {
       const ta = h('textarea', { value: txt, style: { position: 'fixed', top: '-1000px' } });
       document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); toast('JSON copiato', 'ok'); } catch (e) { toast('Copia non riuscita', 'error'); }
+      try { document.execCommand('copy'); toast('Copiato', 'ok'); } catch (e) { toast('Copia non riuscita', 'error'); }
       ta.remove();
     };
-    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(txt).then(function () { toast('JSON copiato', 'ok'); }, fallback);
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(txt).then(function () { toast('Copiato', 'ok'); }, fallback);
     else fallback();
-  }
-
-  /* Anteprima del BPMN generato (bpmn-js, importato alla prima apertura della scheda: serve un contenitore visibile). */
-  function bpmnPreview(plan) {
-    const canvas = h('div', { class: 'bpmn-canvas' });
-    const status = h('div', { class: 'bpmn-status muted' });
-    const el = h('div', { class: 'bpmn-preview' },
-      h('div', { class: 'bpmn-toolbar' },
-        h('span', { class: 'muted' }, 'Processo Camunda 8 generato dall\'Execution Plan · rotella = zoom, trascina = sposta'),
-        h('div', { class: 'spacer' }),
-        h('button', { class: 'small', onclick: function () { if (viewer) viewer.get('canvas').zoom('fit-viewport', 'auto'); } }, '⤢ Adatta'),
-        h('button', { class: 'small', onclick: function () { const f = Exporters.get('camunda').files(plan)[0]; Store.downloadText(f.content, f.name, f.mime); } }, '⭳ .bpmn')),
-      canvas, status);
-    let viewer = null;
-    el._show = function () {
-      if (viewer) return;
-      if (typeof BpmnJS === 'undefined') { status.textContent = 'bpmn-js non caricato.'; return; }
-      viewer = new BpmnJS({ container: canvas });
-      viewer.importXML(Exporters.buildBpmn(plan)).then(function (r) {
-        viewer.get('canvas').zoom('fit-viewport', 'auto');
-        status.textContent = r.warnings && r.warnings.length ? r.warnings.length + ' avvisi di import: ' + r.warnings.map(function (w) { return w.message; }).join('; ') : '';
-      }).catch(function (err) { status.textContent = 'Errore di import BPMN: ' + err.message; status.classList.add('missing'); });
-    };
-    return el;
-  }
-
-  /* Export verso i motori: scelta del motore, file generati, anteprima, download/copia. */
-  function enginesView(plan) {
-    const root = h('div', { class: 'engines' });
-    let current = Exporters.list[0];
-    let fileIdx = 0;
-    function draw() {
-      root.innerHTML = '';
-      let files;
-      try { files = current.files(plan); } catch (e) { files = [{ name: 'errore.txt', mime: 'text/plain', content: 'Errore di generazione: ' + e.message }]; }
-      if (fileIdx >= files.length) fileIdx = 0;
-      const f = files[fileIdx];
-      root.append(
-        h('div', { class: 'engine-list' }, Exporters.list.map(function (e) {
-          return h('button', { class: 'engine' + (e === current ? ' active' : ''), onclick: function () { current = e; fileIdx = 0; draw(); } }, e.label);
-        })),
-        h('div', { class: 'engine-body' },
-          h('ul', { class: 'help engine-notes' }, current.notes.map(function (n) { return h('li', null, n); })),
-          h('div', { class: 'engine-files' },
-            files.map(function (x, i) { return h('button', { class: 'tab' + (i === fileIdx ? ' active' : ''), onclick: function () { fileIdx = i; draw(); } }, x.name); }),
-            h('div', { class: 'spacer' }),
-            h('button', { class: 'small primary', onclick: function () { Store.downloadText(f.content, f.name, f.mime); } }, '⭳ Scarica'),
-            files.length > 1 ? h('button', { class: 'small', onclick: function () { files.forEach(function (x, i) { setTimeout(function () { Store.downloadText(x.content, x.name, x.mime); }, i * 300); }); } }, '⭳ Tutti (' + files.length + ')') : null,
-            h('button', { class: 'small', onclick: function () { copyText(f.content); } }, '⧉ Copia')),
-          h('pre', { class: 'json engine-pre' }, f.content)));
-    }
-    draw();
-    return root;
   }
 
   function showPlan() {
     const o = offer();
     if (!o) return;
     const plan = ExecutionPlan.build(data, o);
-    const json = JSON.stringify(plan, null, 2);
-    const yaml = ExecutionPlan.toYaml(plan);
+    const files = dslFiles(o);
+    const dslEl = h('div', { class: 'plan-dsl' },
+      h('div', { class: 'dsl-toolbar' },
+        h('span', { class: 'muted' }, 'DSL Serverless Workflow 1.0 generato dalla dashboard (sola lettura). Per cambiarlo modifica l\'offerta.'),
+        h('div', { class: 'spacer' }),
+        h('button', { class: 'small', onclick: function () { copyText(files[fileIdx].content); } }, '⧉ Copia')),
+      h('div', { class: 'engine-files' }),
+      h('pre', { class: 'json plan-dsl-pre' }));
+    let fileIdx = 0;
+    const drawDsl = function () {
+      const bar = dslEl.querySelector('.engine-files');
+      bar.innerHTML = '';
+      files.forEach(function (f, i) { bar.append(h('button', { class: 'tab' + (i === fileIdx ? ' active' : ''), onclick: function () { fileIdx = i; drawDsl(); } }, f.name + (i ? ' (sotto-workflow)' : ''))); });
+      dslEl.querySelector('pre').textContent = files[fileIdx].content;
+    };
+    drawDsl();
     const views = [
       { label: 'Vista leggibile', el: ExecutionPlan.render(data, plan) },
-      { label: 'Albero', el: ExecutionPlan.renderTree(data, plan) },
-      { label: 'Diagramma BPMN', el: bpmnPreview(plan), onShow: function (el) { el._show(); } },
-      { label: 'Export motori', el: enginesView(plan) },
-      { label: 'JSON', el: h('pre', { class: 'json' }, json) },
-      { label: 'YAML', el: h('pre', { class: 'json' }, yaml) }
+      { label: 'DSL', el: dslEl }
     ];
     const tabs = views.map(function (v, i) {
       return h('button', { class: 'tab' + (i === 0 ? ' active' : ''), onclick: function () {
         views.forEach(function (x, j) { x.el.classList.toggle('hidden', j !== i); tabs[j].classList.toggle('active', j === i); });
-        if (v.onShow) v.onShow(v.el);
       } }, v.label);
     });
     views.forEach(function (v, i) { if (i) v.el.classList.add('hidden'); });
-    const svgText = function () {
-      return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(views[1].el.querySelector('svg'));
-    };
     Util.modal('Execution Plan — ' + o.name, [h('div', { class: 'tabs-inline' }, tabs)].concat(views.map(function (v) { return v.el; })), [
-      { label: '⭳ JSON', class: 'primary', onClick: function () { Store.download(plan, 'execution-plan-' + o.id + '.json'); } },
-      { label: '⭳ YAML', class: 'primary', onClick: function () { Store.downloadText(yaml, 'execution-plan-' + o.id + '.yaml', 'application/yaml'); } },
-      { label: '⭳ Albero (SVG)', onClick: function () { Store.downloadText(svgText(), 'execution-plan-' + o.id + '.svg', 'image/svg+xml'); } },
-      { label: '⧉ Copia JSON', onClick: function () { copyText(json); } },
-      { label: '⧉ Copia YAML', onClick: function () { copyText(yaml); } },
+      { label: '⭳ Esporta DSL (' + files.length + (files.length > 1 ? ' file' : ' file') + ')', class: 'primary', onClick: function () { files.forEach(function (f, i) { setTimeout(function () { Store.downloadText(f.content, f.name, f.mime); }, i * 300); }); } },
       { label: '🖨 Stampa', onClick: function () { window.print(); } }
     ]);
     if (!plan.summary.valid) toast('Il piano contiene errori di validazione', 'warn');
@@ -1054,102 +1258,33 @@
         h('div', { class: 'hint' }, 'Il testo delle specifiche caricate non è incluso.')));
   }
 
-  /* ---------------- vista DSL ---------------- */
+  /* ---------------- DSL e grafo ---------------- */
   function dslFiles(o) {
     return Exporters.get('temporal').files(ExecutionPlan.build(data, o));
   }
 
-  function currentDsl(o) {
-    return Exporters.toYaml(DslImport.exportMain(data, o));
-  }
-
-  function applyDsl(text) {
-    const o = offer();
-    const res = DslImport.apply(data, text, o);
-    if (!res.ok) {
-      dslDrafts[o.id] = text;
-      dslMessages = { kind: 'error', items: res.errors };
-      renderOfferbar(); renderDsl();
-      return;
-    }
-    const n = res.offer;
-    if (n.id !== o.id && data.offers.some(function (x) { return x.id === n.id; })) {
-      dslDrafts[o.id] = text;
-      dslMessages = { kind: 'error', items: ['Esiste già un\'offerta con id ' + n.id + '.'] };
-      renderDsl();
-      return;
-    }
-    if (o.generation && !n.generation) n.generation = o.generation;
-    data.offers[data.offers.indexOf(o)] = n;
-    delete dslDrafts[o.id];
-    offerId = n.id;
-    selection = null;
-    Store.save(data);
-    validation = Validation.validateOffer(data, n);
-    dslMessages = { kind: 'ok', items: ['DSL applicato: la dashboard è aggiornata.' + (validation.ok ? '' : ' Attenzione: ' + validation.errors.length + ' errori di validazione.')] };
-    renderOfferbar(); renderBanner(); renderDsl();
-  }
-
-  function renderDsl() {
-    const el = $('dslview'); el.innerHTML = '';
+  /* Vista Grafo a tutta pagina: ridisegnata a ogni cambio di offerta. */
+  function renderGraphView() {
+    const el = $('graphview'); el.innerHTML = '';
     const o = offer();
     if (!o) { el.append(h('div', { class: 'empty' }, 'Nessuna offerta selezionata.')); return; }
-    const canonicalText = currentDsl(o);
-    const draft = dslDrafts[o.id];
-    const status = h('span', { class: 'dsl-status' });
-    let timer = null;
-    const area = h('textarea', {
-      class: 'dsl-editor', spellcheck: 'false', value: draft != null ? draft : canonicalText,
-      oninput: function () {
-        dslDrafts[o.id] = area.value === canonicalText ? undefined : area.value;
-        if (dslDrafts[o.id] === undefined) delete dslDrafts[o.id];
-        clearTimeout(timer);
-        timer = setTimeout(function () {
-          const p = DslImport.parse(area.value);
-          status.textContent = p.error ? '✖ ' + p.error : (area.value === canonicalText ? '✔ allineato alla dashboard' : '● modifiche non applicate');
-          status.className = 'dsl-status ' + (p.error ? 'err' : area.value === canonicalText ? 'ok' : 'warn');
-        }, 250);
-      },
-      onkeydown: function (e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); applyDsl(area.value); }
-        if (e.key === 'Tab') { e.preventDefault(); const s = area.selectionStart; area.setRangeText('  ', s, area.selectionEnd, 'end'); }
-      }
-    });
-    status.textContent = draft != null ? '● modifiche non applicate' : '✔ allineato alla dashboard';
-    status.className = 'dsl-status ' + (draft != null ? 'warn' : 'ok');
-    const files = dslFiles(o);
-    el.append(
-      h('div', { class: 'dsl-main' },
-        h('div', { class: 'dsl-toolbar' },
-          h('b', null, files[0].name), status, h('div', { class: 'spacer' }),
-          h('button', { class: 'primary', title: 'Ctrl+S', onclick: function () { applyDsl(area.value); } }, '⟲ Applica alla dashboard'),
-          h('button', { disabled: draft == null, onclick: function () { delete dslDrafts[o.id]; dslMessages = null; renderOfferbar(); renderDsl(); } }, '✕ Scarta modifiche'),
-          h('button', { onclick: function () { copyText(area.value); } }, '⧉ Copia'),
-          h('button', { title: 'Scarica il DSL da pubblicare su Temporal (principale + sotto-workflow)', onclick: function () {
-            if (dslDrafts[o.id]) { toast('Applica o scarta le modifiche prima di esportare', 'warn'); return; }
-            files.forEach(function (f) { Store.downloadText(f.content, f.name, f.mime); });
-          } }, '⭳ Esporta DSL (' + files.length + ' file)')),
-        dslMessages ? h('div', { class: 'dsl-messages ' + dslMessages.kind }, dslMessages.items.map(function (m) { return h('div', null, m); })) : null,
-        area),
-      h('aside', { class: 'dsl-side' },
-        h('h4', null, 'Cosa si può modificare qui'),
-        h('ul', { class: 'help' },
-          h('li', null, h('code', null, 'document.title'), ': nome dell\'offerta'),
-          h('li', null, h('code', null, 'document.metadata.offer'), ': id, descrizione, prodotti'),
-          h('li', null, h('code', null, 'metadata.block'), ' di ogni blocco: prodotti, dipendenze, configurazione (input, esiti, KO con task, notifiche, callback)'),
-          h('li', null, h('code', null, 'metadata.gates'), ' delle barre: regole di passaggio'),
-          h('li', null, 'il retry dei blocchi (', h('code', null, 'catch.retry'), ')')),
-        h('div', { class: 'muted' }, 'Il resto del DSL è generato: modificalo dalla vista visuale. Le modifiche non riportabili vengono segnalate con il punto esatto e restano come bozza.'),
-        files.length > 1 ? h('h4', null, 'Sotto-workflow (generati)') : null,
-        files.slice(1).map(function (f) { return h('details', null, h('summary', null, f.name), h('pre', { class: 'json' }, f.content)); })));
+    const plan = ExecutionPlan.build(data, o);
+    const g = ExecutionPlan.renderGraph(data, plan);
+    const bar = g.querySelector('.plan-graph-bar');
+    bar.append(h('button', { class: 'small', onclick: function () {
+      const svg = g.querySelector('svg');
+      Store.downloadText('<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg), 'grafo-' + o.id + '.svg', 'image/svg+xml');
+    } }, '⭳ SVG'));
+    el.append(g);
   }
 
   /* ---------------- bootstrap ---------------- */
   const requested = new URLSearchParams(location.search).get('offer');
   if (requested && data.offers.some(function (x) { return x.id === requested; })) offerId = requested;
-  if (new URLSearchParams(location.search).get('view') === 'dsl') view = 'dsl';
   $('btn-plan').addEventListener('click', showPlan);
+  $('btn-sim').addEventListener('click', function () { if (!offer()) return; if (view !== 'visual') { view = 'visual'; simMode = true; render(); return; } toggleSim(); });
   initPanelGrip();
+  window.addEventListener('resize', function () { if (view === 'visual') drawArrows(); });
   $('btn-validate').addEventListener('click', function () {
     const o = offer(); if (!o) return;
     selection = null; render();

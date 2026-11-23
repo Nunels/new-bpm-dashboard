@@ -12,15 +12,13 @@ function analyzeOffer(catalogJson, offerJson) {
       warnings: v.warnings.map(function (e) { return e.msg; }),
       infos: v.infos.map(function (e) { return e.msg; })
     },
-    files: [], simulation: null, roundTrip: null
+    files: [], simulation: null
   };
   if (v.errors.length) return JSON.stringify(out);
   const plan = ExecutionPlan.build(data, offer);
   out.files = Exporters.get('temporal').files(plan).map(function (f) { return { name: f.name, content: f.content }; });
   const sim = Simulator.run(data, offer, {});
   out.simulation = { status: sim.final.status, message: sim.final.message };
-  const rt = DslImport.apply(data, out.files[0].content, null);
-  out.roundTrip = { ok: rt.ok, errors: rt.errors || [] };
   return JSON.stringify(out);
 }
 

@@ -117,10 +117,12 @@
       section('Input (contratto di request)',
         listEditor(t.inputs, ['name', 'type', 'source', 'required'], { name: 'Nome (percorso)', type: 'Tipo', source: 'Sorgente di default', required: 'Obbl.' },
           function () { return { name: 'nuovoInput', type: 'string', source: '', required: false, description: '' }; }, { importFields: true }),
+        h('div', { class: 'field-hint' }, 'Liste: scrivi il campo di un elemento come spedizioni[].cap e aggiungi la riga della lista (spedizioni[], tipo array) con l\'origine di default: offerta.prodotti = un elemento per prodotto, oppure un campo lista come pratica.spedizioni[]. Nei campi dentro la lista: @.campo, prodotto.id, prodotti.{prodotto}.campo.'),
         check('Request pluggable (estendibile per prodotto)', !!t.extensions.request, function (on) { t.extensions.request = on; })),
       section('Output',
         listEditor(t.outputs, ['name', 'type', 'description'], { name: 'Nome (percorso)', type: 'Tipo', description: 'Descrizione' },
-          function () { return { name: 'nuovoOutput', type: 'string', description: '' }; }, { importFields: true })),
+          function () { return { name: 'nuovoOutput', type: 'string', description: '' }; }, { importFields: true }),
+        productResultsEditor(t)),
       section('Esiti supportati',
         h('div', null,
           check('OK', true, function () { }),
@@ -138,6 +140,29 @@
       h('div', { class: 'panel-actions' },
         h('button', { onclick: function () { duplicateTask(t); } }, '⧉ Duplica'),
         h('button', { class: 'danger', onclick: function () { deleteTask(t); } }, '🗑 Elimina task')));
+  }
+
+  /* Il servizio risponde con una lista che ha un risultato per ogni prodotto: da lì la dashboard ricava l'esito di ciascun prodotto. */
+  function productResultsEditor(t) {
+    const lists = Fields.listKeys(t.outputs).map(function (k) { return k.slice(0, -2); }).filter(function (k) { return k.indexOf('[]') < 0; });
+    const pr = t.productResults;
+    const csv = function (arr) { return (arr || []).join(', '); };
+    const parse = function (v) { return String(v).split(',').map(function (x) { return x.trim(); }).filter(Boolean); };
+    return h('div', { class: 'pr-box' },
+      check('Il servizio restituisce una lista con un risultato per prodotto', !!pr, function (on) {
+        t.productResults = on ? { list: lists[0] || 'risultati', productField: 'prodotto', outcomeField: 'esito', ok: ['OK'], koTask: [] } : null;
+        save(); render();
+      }),
+      pr ? h('div', null,
+        h('div', { class: 'row3' },
+          field('Lista', h('input', { type: 'text', list: 'pr-lists', value: pr.list, onchange: function (e) { pr.list = e.target.value.trim(); save(); } })),
+          field('Campo prodotto', input(pr, 'productField')),
+          field('Campo esito', input(pr, 'outcomeField'))),
+        h('datalist', { id: 'pr-lists' }, lists.map(function (l) { return h('option', { value: l }); })),
+        h('div', { class: 'row2' },
+          field('Valori di esito = OK', h('input', { type: 'text', value: csv(pr.ok), onchange: function (e) { pr.ok = parse(e.target.value); save(); } })),
+          field('Valori = KO con task manuale', h('input', { type: 'text', value: csv(pr.koTask), onchange: function (e) { pr.koTask = parse(e.target.value); save(); } }))),
+        h('div', { class: 'field-hint' }, 'Aggiungi agli output i campi ' + pr.list + '[].' + pr.productField + ' e ' + pr.list + '[].' + pr.outcomeField + '. Ogni altro valore di esito vale KO. Nei blocchi successivi: esiti.<blocco>.' + pr.list + '[].campo = tutti gli elementi, ' + pr.list + '[@].campo = quello del prodotto corrente.')) : h('div', { class: 'field-hint' }, 'Esempio: una chiamata per N prodotti che risponde con { risultati: [ { prodotto, esito, … } ] }. Il worker non deve costruire productOutcomes.'));
   }
 
   /* Tabella editabile per input/output/campi: tipo, filtro (i task possono avere ~100 campi) e import da JSON Schema o JSON di esempio. */
@@ -191,7 +216,7 @@
       const r = new FileReader(); r.onload = function () { ta.value = String(r.result); }; r.readAsText(fl);
     } });
     Util.modal('Importa campi', h('div', null,
-      h('p', { class: 'muted' }, 'Gli oggetti annidati diventano nomi con il punto (cliente.documento.numero). Gli array restano un unico campo. Se il campo esiste già ne viene aggiornato il tipo.'),
+      h('p', { class: 'muted' }, 'Gli oggetti annidati diventano nomi con il punto (cliente.documento.numero). Gli array di oggetti diventano campi di lista (spedizioni[].cap); gli array di valori restano un unico campo. Se il campo esiste già ne viene aggiornato il tipo.'),
       file, ta), [{
       label: 'Importa', class: 'primary', onClick: function () {
         const r = Fields.parse(ta.value);

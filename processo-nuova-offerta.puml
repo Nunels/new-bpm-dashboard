@@ -32,7 +32,7 @@ rectangle "Sistemi e API\ndei prodotti" as SYS #F4F6F8
 A --> S : carica
 S --> AI
 AI --> D : offerta\nvalidata
-D <--> W : generazione
+D <-> W : generazione
 W --> T : pubblicazione\n(senza sviluppo)
 T --> SYS : chiamate\nai servizi
 

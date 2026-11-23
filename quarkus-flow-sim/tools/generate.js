@@ -12,7 +12,7 @@ const BASE_URL = 'http://localhost:8089/mock';
 
 const ctx = { console, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, document: { getElementById: () => null, createElement: () => ({}) }, Node: function () {} };
 ctx.window = ctx; vm.createContext(ctx);
-['seed', 'store', 'validation', 'simulator', 'exporters/common', 'exporters/serverless', 'execution-plan']
+['seed', 'fields', 'store', 'conditions', 'validation', 'simulator', 'exporters/common', 'exporters/serverless', 'execution-plan']
   .forEach(f => vm.runInContext(fs.readFileSync(path.join(dash, f + '.js'), 'utf8'), ctx, { filename: f }));
 ctx.Exporters.BASE_URL = BASE_URL;
 

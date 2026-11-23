@@ -359,7 +359,6 @@ public class GenerationService {
         List<DslFile> files = new ArrayList<>();
         a.get("files").forEach(f -> files.add(new DslFile(f.get("name").asText(), f.get("content").asText())));
         files.forEach(f -> dsl.check(f.name, f.content).forEach(p -> errors.add("DSL generato: " + p)));
-        if (!a.at("/roundTrip/ok").asBoolean()) a.at("/roundTrip/errors").forEach(e -> errors.add("DSL non riconvertibile in dashboard: " + e.asText()));
 
         List<String> warnings = new ArrayList<>();
         a.at("/validation/warnings").forEach(w -> warnings.add("Validazione: " + w.asText()));

@@ -12,13 +12,17 @@ window.SEED = {
   practice: {
     fields: [
       { name: 'pratica.id', type: 'string', required: true, description: 'Identificativo della pratica' },
-      { name: 'pratica.documenti', type: 'array', required: true, description: 'Documenti caricati dal cliente' },
+      { name: 'pratica.documenti[].tipo', type: 'string', required: true, description: 'Tipo del documento caricato dal cliente' },
+      { name: 'pratica.documenti[].nome', type: 'string', required: true, description: 'Nome del file' },
       { name: 'cliente.codiceFiscale', type: 'string', required: true, description: '' },
       { name: 'cliente.email', type: 'string', required: true, description: '' },
-      { name: 'cliente.documento.tipo', type: 'string', required: true, description: 'Tipo di documento d\'identità' },
+      { name: 'cliente.documento.tipo', type: 'string', required: true, description: 'Tipo di documento d\'identitÃ ' },
       { name: 'cliente.documento.numero', type: 'string', required: true, description: '' },
       { name: 'cliente.documento.scadenza', type: 'date', required: true, description: '' },
-      { name: 'prodotti.TIM.msisdn', type: 'string', required: false, description: 'Numero di linea (solo offerte con TIM)' }
+      { name: 'prodotti.TIM.msisdn', type: 'string', required: false, description: 'Numero di linea (solo offerte con TIM)' },
+      { name: 'cliente.giaVerificato', type: 'boolean', required: false, description: 'Cliente giÃ  verificato in precedenza (si possono saltare i controlli)' },
+      { name: 'pratica.spedizioni[].destinatario.cap', type: 'string', required: false, description: 'CAP di consegna di ogni spedizione' },
+      { name: 'pratica.spedizioni[].colli[].peso', type: 'number', required: false, description: 'Peso (kg) di ogni collo di ogni spedizione' }
     ]
   },
   products: [
@@ -29,7 +33,7 @@ window.SEED = {
   ],
   tasks: [
     {
-      id: 'VERIFICA_DOCUMENTO', name: 'Verifica documento', description: 'Verifica validità del documento di identità',
+      id: 'VERIFICA_DOCUMENTO', name: 'Verifica documento', description: 'Verifica validitÃ  del documento di identitÃ ',
       type: 'sync', scope: 'common', callMode: 'perOffer',
       compatibleProducts: ['CONTO', 'EVO', 'LIBMIN', 'TIM'], allowedSteps: ['PRELIMINARI'],
       api: { method: 'POST', path: '/documenti/v1/verifica' },
@@ -51,9 +55,16 @@ window.SEED = {
       inputs: [
         { name: 'codiceFiscale', source: 'cliente.codiceFiscale', required: true },
         { name: 'documento', source: 'cliente.documento.numero', required: true },
-        { name: 'prodotti', source: 'offerta.prodotti', required: true }
+        { name: 'prodotti[]', type: 'array', source: 'offerta.prodotti', required: true },
+        { name: 'prodotti[].id', source: 'prodotto.id', required: true }
       ],
-      outputs: [{ name: 'esitoOracolo', description: 'OK/KO per prodotto' }, { name: 'scoreRischio', description: '0-100' }],
+      outputs: [
+        { name: 'esitoOracolo', description: 'OK/KO per prodotto' }, { name: 'scoreRischio', description: '0-100' },
+        { name: 'risultati[].prodotto', description: 'Prodotto a cui si riferisce il risultato' },
+        { name: 'risultati[].esito', description: 'OK/KO del prodotto' },
+        { name: 'risultati[].score', type: 'integer', description: 'Punteggio di rischio del prodotto' }
+      ],
+      productResults: { list: 'risultati', productField: 'prodotto', outcomeField: 'esito', ok: ['OK'], koTask: [] },
       outcomes: ['OK', 'KO', 'KO_TASK'],
       extensions: { request: true, ko: true },
       defaults: { retry: { count: 3, intervalSec: 30 }, koQueue: 'BO_ANTIFRODE', callbackTopic: '' }
@@ -87,7 +98,7 @@ window.SEED = {
       defaults: { retry: { count: 2, intervalSec: 30 }, koQueue: 'BO_CREDITO', callbackTopic: '' }
     },
     {
-      id: 'CRIBIS', name: 'Cribis', description: 'Verifica se il cliente è "in rosso" (solo Conto)',
+      id: 'CRIBIS', name: 'Cribis', description: 'Verifica se il cliente Ã¨ "in rosso" (solo Conto)',
       type: 'sync', scope: 'vertical', callMode: 'perProduct',
       compatibleProducts: ['CONTO'], allowedSteps: ['VERTICALI'],
       api: { method: 'GET', path: '/cribis/v1/rating/{codiceFiscale}' },
@@ -104,7 +115,9 @@ window.SEED = {
       api: { method: 'POST', path: '/backoffice/v1/pratiche' },
       inputs: [
         { name: 'idPratica', source: 'pratica.id', required: true },
-        { name: 'documenti', source: 'pratica.documenti', required: true }
+        { name: 'documenti[]', type: 'array', source: 'pratica.documenti[]', required: true },
+        { name: 'documenti[].tipo', source: '@.tipo', required: true },
+        { name: 'documenti[].nome', source: '@.nome', required: true }
       ],
       outputs: [{ name: 'esitoBO', description: 'OK/KO' }, { name: 'operatore', description: 'Operatore BO' }],
       outcomes: ['OK', 'KO', 'KO_TASK'],
@@ -166,6 +179,30 @@ window.SEED = {
       outcomes: ['OK', 'KO'],
       extensions: { request: true, ko: false },
       defaults: { retry: { count: 3, intervalSec: 60 }, koQueue: '', callbackTopic: '' }
+    },
+    {
+      id: 'SPEDIZIONE_KIT', name: 'Spedizione kit', description: 'Spedizione dei kit con l\'elenco delle spedizioni (e dei colli) della pratica; risponde con un esito per prodotto e il tracking di ogni spedizione',
+      type: 'sync', scope: 'common', callMode: 'perOffer',
+      compatibleProducts: ['CONTO', 'EVO', 'LIBMIN', 'TIM'], allowedSteps: ['ATTIVAZIONI', 'POST_ATTIVAZIONI'],
+      api: { method: 'POST', path: '/logistica/v1/spedizioni' },
+      inputs: [
+        { name: 'idPratica', source: 'pratica.id', required: true },
+        { name: 'prodotti[]', type: 'array', source: 'offerta.prodotti', required: true },
+        { name: 'prodotti[].id', source: 'prodotto.id', required: true },
+        { name: 'spedizioni[]', type: 'array', source: 'pratica.spedizioni[]', required: true },
+        { name: 'spedizioni[].cap', source: '@.destinatario.cap', required: true },
+        { name: 'spedizioni[].colli[]', type: 'array', source: '@.colli[]', required: false },
+        { name: 'spedizioni[].colli[].peso', source: '@.peso', required: false }
+      ],
+      outputs: [
+        { name: 'risultati[].prodotto', description: 'Prodotto a cui si riferisce il risultato' },
+        { name: 'risultati[].esito', description: 'OK, KO o MANUALE (serve un intervento)' },
+        { name: 'spedizioni[].tracking', description: 'Codice di tracking di ogni spedizione' }
+      ],
+      productResults: { list: 'risultati', productField: 'prodotto', outcomeField: 'esito', ok: ['OK'], koTask: ['MANUALE'] },
+      outcomes: ['OK', 'KO', 'KO_TASK'],
+      extensions: { request: false, ko: false },
+      defaults: { retry: { count: 2, intervalSec: 60 }, koQueue: 'BO_LOGISTICA', callbackTopic: '' }
     }
   ],
   offers: [
@@ -185,7 +222,7 @@ window.SEED = {
           config: { inputMapping: { template: 'WELCOME_KIT' } } }
       ],
       gates: [
-        { id: 'G_PRE_1', afterStep: 'PRELIMINARI', note: 'Oracolo 2 può rispondere in ritardo', rules: [{ type: 'DONT_WAIT', blockId: 'B_ORACOLO2' }] },
+        { id: 'G_PRE_1', afterStep: 'PRELIMINARI', note: 'Oracolo 2 puÃ² rispondere in ritardo', rules: [{ type: 'DONT_WAIT', blockId: 'B_ORACOLO2' }] },
         { id: 'G_PRE_2', afterStep: 'PRELIMINARI', note: '', rules: [{ type: 'ONLY_OK' }] },
         { id: 'G_VER_1', afterStep: 'VERTICALI', note: '', rules: [{ type: 'ONLY_OK' }] },
         { id: 'G_BO_1', afterStep: 'BO', note: '', rules: [{ type: 'STOP_ON_KO', products: [] }] },
@@ -204,6 +241,43 @@ window.SEED = {
       ],
       gates: [
         { id: 'G_C_1', afterStep: 'PRELIMINARI', note: '', rules: [{ type: 'STOP_ON_KO', products: [] }] }
+      ]
+    },
+    {
+      id: 'OFF_DEMO', name: 'Demo',
+      description: 'Offerta dimostrativa: blocchi paralleli impilati, blocchi con Â«SE â€¦Â», liste in input (un elemento per prodotto, spedizioni e colli dalla pratica) e in output (risultati per prodotto, letti con [@] e []), condizioni su liste, ritorno indietro, salto in avanti e stop dai gate, KO con task, Non attendere e callback asincrone. In simulazione compila i Â«Dati dello scenarioÂ» per far valere le condizioni.',
+      products: ['CONTO', 'EVO', 'TIM'],
+      blocks: [
+        // Preliminari: tre blocchi in parallelo nella stessa colonna (documento, Oracolo con lista per prodotto, Oracolo 2 di TIM)
+        { id: 'B_D_DOC', taskId: 'VERIFICA_DOCUMENTO', stepId: 'PRELIMINARI', products: ['CONTO', 'EVO', 'TIM'], dependsOn: [] },
+        { id: 'B_D_ORACOLO', taskId: 'ORACOLO', stepId: 'PRELIMINARI', products: ['CONTO', 'EVO'], dependsOn: [] },
+        { id: 'B_D_ORACOLO2', taskId: 'ORACOLO_2', stepId: 'PRELIMINARI', products: ['TIM'], dependsOn: [] },
+        // Verticali: due blocchi condizionati in parallelo su Conto (uno sul punteggio del prodotto letto con [@], uno sul tipo di documento)
+        { id: 'B_D_CRIBIS', taskId: 'CRIBIS', stepId: 'VERTICALI', products: ['CONTO'], dependsOn: [],
+          config: { when: { join: 'AND', clauses: [{ left: 'esiti.B_D_ORACOLO.risultati[@].score', op: '>=', value: '50' }] } } },
+        { id: 'B_D_PREG', taskId: 'PREGIUDIZIEVOLI', stepId: 'VERTICALI', products: ['CONTO', 'EVO'], dependsOn: [],
+          config: { when: { join: 'AND', clauses: [{ left: 'cliente.documento.tipo', op: '!=', value: 'CI' }] } } },
+        // BO: asincrono con callback, la lista dei documenti parte solo se ce ne sono (condizione su lista)
+        { id: 'B_D_BO', taskId: 'PRESA_IN_CARICO_BO', stepId: 'BO', products: ['CONTO', 'EVO', 'TIM'], dependsOn: [],
+          config: { when: { join: 'AND', clauses: [{ left: 'pratica.documenti[]', op: 'countGt', value: '0' }] } } },
+        { id: 'B_D_ATT_BANCA', taskId: 'ATTIVAZIONE_BANCARIA', stepId: 'ATTIVAZIONI', products: ['CONTO', 'EVO'], dependsOn: [] },
+        { id: 'B_D_ATT_TIM', taskId: 'ATTIVAZIONE_TIM', stepId: 'ATTIVAZIONI', products: ['TIM'], dependsOn: [] },
+        // Post attivazioni: spedizione con liste, benvenuto per tutti e un avviso solo se l'attivazione TIM Ã¨ in KO
+        { id: 'B_D_SPED', taskId: 'SPEDIZIONE_KIT', stepId: 'POST_ATTIVAZIONI', products: ['CONTO', 'EVO', 'TIM'], dependsOn: [] },
+        { id: 'B_D_WELCOME', taskId: 'COMUNICAZIONI', stepId: 'POST_ATTIVAZIONI', products: ['CONTO', 'EVO', 'TIM'], dependsOn: [],
+          config: { inputMapping: { template: 'WELCOME_KIT' } } },
+        { id: 'B_D_RITARDO', taskId: 'COMUNICAZIONI', stepId: 'POST_ATTIVAZIONI', products: ['TIM'], dependsOn: [],
+          config: { inputMapping: { template: 'TIM_RITARDO' }, when: { join: 'AND', clauses: [{ left: 'esito.B_D_ATT_TIM', op: '==', value: 'KO' }] } } }
+      ],
+      gates: [
+        { id: 'G_D_PRE_1', afterStep: 'PRELIMINARI', note: 'Oracolo 2 puÃ² rispondere in ritardo', rules: [{ type: 'DONT_WAIT', blockId: 'B_D_ORACOLO2' }] },
+        { id: 'G_D_PRE_2', afterStep: 'PRELIMINARI', note: 'Clienti giÃ  verificati: si saltano verticali e BO',
+          rules: [{ type: 'ONLY_OK' }, { type: 'ROUTE', to: 'ATTIVAZIONI', maxIterations: 3, onExceed: 'STOP', when: { join: 'AND', clauses: [{ left: 'cliente.giaVerificato', op: '==', value: 'true' }] } }] },
+        { id: 'G_D_VER', afterStep: 'VERTICALI', note: 'Se Cribis Ã¨ KO si ripetono i preliminari (al massimo 2 volte)',
+          rules: [{ type: 'ONLY_OK' }, { type: 'ROUTE', to: 'PRELIMINARI', maxIterations: 2, onExceed: 'STOP', when: { join: 'AND', clauses: [{ left: 'esito.B_D_CRIBIS', op: '==', value: 'KO' }] } }] },
+        { id: 'G_D_BO', afterStep: 'BO', note: 'Si ferma tutto se Oracolo ha dato KO a un prodotto',
+          rules: [{ type: 'ROUTE', to: 'STOP', when: { join: 'AND', clauses: [{ left: 'esiti.B_D_ORACOLO.risultati[].esito', op: 'anyEq', value: 'KO' }] } }] },
+        { id: 'G_D_ATT', afterStep: 'ATTIVAZIONI', note: 'Le comunicazioni partono anche se un\'attivazione fallisce', rules: [{ type: 'CONTINUE_ON_KO' }] }
       ]
     }
   ]

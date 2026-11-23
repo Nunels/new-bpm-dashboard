@@ -274,7 +274,7 @@ class GenerationApiTest {
     @Test
     void dashboardIsServedByTheBackend() {
         given().when().get("/generate.html").then().statusCode(200);
-        given().when().get("/index.html").then().statusCode(200).body(org.hamcrest.Matchers.containsString("js/dsl-import.js"));
+        given().when().get("/index.html").then().statusCode(200).body(org.hamcrest.Matchers.containsString("js/plan-graph.js"));
     }
 
     private static List<String> list(JsonNode a) {

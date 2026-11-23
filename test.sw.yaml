@@ -1,0 +1,310 @@
+document:
+  dsl: "1.0.0"
+  namespace: offers
+  name: offer-off-test1
+  version: "1.0.0"
+  title: test1
+  summary: " — generato da BPM AI Offer Designer"
+  metadata:
+    generator: offer-process-designer
+    format: 1
+    offer:
+      id: OFF_TEST1
+      description: ""
+      products:
+        - EVO
+        - TIM
+      blockOrder:
+        - B_ORACOLO_2
+        - B_ORACOLO
+      gateOrder: []
+input:
+  schema:
+    format: json
+    document:
+      type: object
+      properties:
+        pratica:
+          type: object
+          properties:
+            id:
+              type: string
+            documenti:
+              type: string
+          required:
+            - id
+            - documenti
+        cliente:
+          type: object
+          properties:
+            documento:
+              type: object
+              properties:
+                tipo:
+                  type: string
+                numero:
+                  type: string
+                scadenza:
+                  type: string
+              required:
+                - tipo
+                - numero
+                - scadenza
+            codiceFiscale:
+              type: string
+            email:
+              type: string
+          required:
+            - documento
+            - codiceFiscale
+            - email
+        prodotti:
+          type: object
+          properties:
+            TIM:
+              type: object
+              properties:
+                msisdn:
+                  type: string
+      required:
+        - pratica
+        - cliente
+do:
+  - init-offer:
+      set:
+        activeProducts:
+          - EVO
+          - TIM
+        koProducts: []
+        esiti: {}
+        esitiByProduct: {}
+      export:
+        as: ${ $output }
+  - step-preliminari:
+      do:
+        - preliminari-stage-1:
+            fork:
+              branches:
+                - b-oracolo-2:
+                    for:
+                      each: product
+                      in: ${ [$context.activeProducts[] | select((. == "TIM"))] }
+                    do:
+                      - b-oracolo-2-call:
+                          try:
+                            - invoke:
+                                call: http
+                                with:
+                                  method: post
+                                  endpoint:
+                                    uri: https://api.example.internal/partner/tim/v1/oracolo
+                                  body:
+                                    codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                                    msisdn: ${ $workflow.input.prodotti.TIM.msisdn }
+                                    products: ${ [$product] }
+                                export:
+                                  as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ORACOLO_2\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ORACOLO_2\": ((($context.koByBlock[\"B_ORACOLO_2\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }), esitiByProduct: (($context.esitiByProduct // {}) + { \"B_ORACOLO_2\": (($context.esitiByProduct[\"B_ORACOLO_2\"] // {}) + { ($product): $output }) }) } }"
+                          catch:
+                            errors:
+                              with:
+                                type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                            retry:
+                              delay:
+                                seconds: 60
+                              limit:
+                                attempt:
+                                  count: 2
+                    metadata:
+                      activityId: B_ORACOLO_2
+                      taskId: ORACOLO_2
+                      products: TIM
+                      invocation: ONE_CALL_PER_PRODUCT
+                      block:
+                        id: B_ORACOLO_2
+                        taskId: ORACOLO_2
+                        stepId: PRELIMINARI
+                        products:
+                          - TIM
+                        dependsOn: []
+                        config:
+                          callMode: perProduct
+                          inputMapping:
+                            codiceFiscale: cliente.codiceFiscale
+                            msisdn: prodotti.TIM.msisdn
+                          retry:
+                            intervalSec: 60
+                          onKo: MARK_KO
+                          koTask:
+                            enabled: false
+                            queue: ""
+                            slaHours: 24
+                          notify:
+                            onOk: false
+                            onKo: false
+                            template: ""
+                          async:
+                            callbackTopic: ""
+                            timeoutHours: 48
+                - b-oracolo:
+                    do:
+                      - b-oracolo-call:
+                          try:
+                            - invoke:
+                                call: http
+                                with:
+                                  method: post
+                                  endpoint:
+                                    uri: https://api.example.internal/oracolo/v1/check
+                                  body:
+                                    codiceFiscale: ${ $workflow.input.cliente.codiceFiscale }
+                                    documento: ${ $workflow.input.cliente.documento.numero }
+                                    prodotti: ${ [$context.activeProducts[] | select((. == "EVO"))] }
+                                    products: ${ [$context.activeProducts[] | select((. == "EVO"))] }
+                                export:
+                                  as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ORACOLO\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ORACOLO\": ((($context.koByBlock[\"B_ORACOLO\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                          catch:
+                            errors:
+                              with:
+                                type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                            retry:
+                              delay:
+                                seconds: 30
+                              limit:
+                                attempt:
+                                  count: 3
+                      - b-oracolo-ko-task:
+                          if: ${ (.productOutcomes // {}) | to_entries | any(.value == "KO_TASK") }
+                          do:
+                            - request-manual-task:
+                                emit:
+                                  event:
+                                    with:
+                                      source: https://example.com/offers
+                                      type: manual-task.requested
+                                      data:
+                                        queue: BO_ANTIFRODE
+                                        slaHours: 24
+                                        activityId: B_ORACOLO
+                                        praticaId: ${ $workflow.input.pratica.id }
+                            - await-manual-task:
+                                listen:
+                                  to:
+                                    one:
+                                      with:
+                                        type: manual-task.completed
+                                      correlate:
+                                        activity:
+                                          from: ${ .data.activityId }
+                                          expect: B_ORACOLO
+                                output:
+                                  as: ${ .[0] }
+                                export:
+                                  as: "${ $context + { esiti: (($context.esiti // {}) + { \"B_ORACOLO\": $output }), koProducts: ((($context.koProducts // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique), koByBlock: (($context.koByBlock // {}) + { \"B_ORACOLO\": ((($context.koByBlock[\"B_ORACOLO\"] // []) + [($output.productOutcomes // {}) | to_entries[] | select(.value == \"KO\") | .key]) | unique) }) } }"
+                    metadata:
+                      activityId: B_ORACOLO
+                      taskId: ORACOLO
+                      products: EVO
+                      invocation: SINGLE_CALL_FOR_N_PRODUCTS
+                      block:
+                        id: B_ORACOLO
+                        taskId: ORACOLO
+                        stepId: PRELIMINARI
+                        products:
+                          - EVO
+                        dependsOn: []
+                        config:
+                          callMode: perOffer
+                          inputMapping:
+                            codiceFiscale: cliente.codiceFiscale
+                            documento: cliente.documento.numero
+                            prodotti: offerta.prodotti
+                          retry:
+                            intervalSec: 30
+                          onKo: MARK_KO
+                          koTask:
+                            enabled: true
+                            queue: BO_ANTIFRODE
+                            slaHours: 24
+                          notify:
+                            onOk: false
+                            onKo: false
+                            template: ""
+                          async:
+                            callbackTopic: ""
+                            timeoutHours: 48
+              compete: false
+      metadata:
+        step: Verifiche Preliminari
+  - gate-preliminari:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+        afterStep: PRELIMINARI
+        gates: []
+  - gate-preliminari-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - gate-verticali:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+        afterStep: VERTICALI
+        gates: []
+  - gate-verticali-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - gate-bo:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+        afterStep: BO
+        gates: []
+  - gate-bo-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - gate-attivazioni:
+      switch:
+        - no-products:
+            when: ${ (($context.activeProducts - $context.koProducts) | length) == 0 }
+            then: offer-no-products
+        - proceed:
+            then: continue
+      metadata:
+        description: Attendi l'esito di tutti i blocchi · Proseguono solo i prodotti OK (default)
+        afterStep: ATTIVAZIONI
+        gates: []
+  - gate-attivazioni-apply:
+      set:
+        activeProducts: ${ ($context.activeProducts - $context.koProducts) }
+      export:
+        as: "${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }"
+  - offer-completed:
+      set:
+        status: COMPLETED
+        activeProducts: ${ $context.activeProducts }
+      then: end
+  - offer-no-products:
+      set:
+        status: NO_PRODUCTS
+      then: end

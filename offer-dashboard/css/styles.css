@@ -95,25 +95,23 @@ input:focus, select:focus, textarea:focus { outline: 2px solid #9cc3dd; border-c
 /* layout */
 .layout { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-/* tab Visuale / DSL */
+/* tab Visuale / Grafo */
 .viewtabs { display: flex; gap: 0; }
 .viewtabs .tab { border-radius: 0; }
 .viewtabs .tab:first-child { border-radius: 6px 0 0 6px; }
 .viewtabs .tab:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
-.viewtabs .tab.draft:not(.active) { color: var(--warn); font-weight: 700; }
 .dslview { flex: 1; display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+.dslview.graphview { display: block; overflow: auto; padding: 10px 14px; }
+.graphview .plan-graph-scroll { max-height: calc(100vh - 190px); }
+.plan-dsl { display: flex; flex-direction: column; gap: 8px; }
+.plan-dsl-pre { max-height: 60vh; white-space: pre; }
 .dsl-main { display: flex; flex-direction: column; min-height: 0; padding: 10px 14px; gap: 8px; }
 .dsl-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dsl-status { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
 .dsl-status.ok { background: var(--ok-l); color: var(--ok); }
-.dsl-status.warn { background: var(--warn-l); color: var(--warn-t); }
-.dsl-status.err { background: var(--ko-l); color: var(--ko); }
 .dsl-editor { flex: 1; min-height: 300px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.45; background: var(--navy); color: #d6e4ef; border: none; border-radius: 6px; padding: 12px; white-space: pre; overflow: auto; tab-size: 2; resize: none; }
 .dsl-editor:focus { outline: 2px solid var(--orange); }
 .dsl-editor[readonly] { cursor: default; }
-.dsl-messages { border-radius: 6px; padding: 8px 10px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
-.dsl-messages.error { background: var(--ko-l); color: #8e2a1f; }
-.dsl-messages.ok { background: var(--ok-l); color: var(--ok); }
 .dsl-side { background: #fff; border-left: 1px solid var(--line); padding: 12px 14px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
 .dsl-side h4 { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--blue); }
 .dsl-side pre.json { max-height: 260px; }
@@ -222,6 +220,32 @@ input:focus, select:focus, textarea:focus { outline: 2px solid #9cc3dd; border-c
 .v-pass { color: var(--ok); border-color: var(--ok); }
 .v-wait { color: var(--warn); border-color: var(--warn); }
 .v-stop { color: var(--ko); border-color: var(--ko); }
+.v-route { color: var(--blue); border-color: var(--blue); }
+.block.conditional { border-style: dashed; border-color: #ffd6b8; }
+.block.rel-parent { border: 4px solid #e07b39; margin: 4px; }
+.block.rel-child { border: 4px solid #2e8b57; margin: 4px; }
+.block.dimmed, .block-bridge.dimmed { opacity: .28; }
+.board.focus .block { margin-left: 14px; margin-right: 14px; }
+.board.focus .block.selected { border-color: #fff; box-shadow: 0 0 0 4px var(--poste-blue), 0 0 14px rgba(4,69,184,.6); }
+.bb.join { background: #ffd23f; color: #3a2f00; font-weight: 700; }
+.rel-arrows { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 6; }
+.bb.cond { background: var(--orange); color: #fff; font-weight: 700; }
+.gate.has-route { border-color: var(--blue-d); }
+.gate-route-mark { position: absolute; bottom: 4px; color: #fff; font-weight: 700; font-size: 13px; }
+.gate { position: relative; }
+.badge.cond { background: var(--orange-l); color: var(--orange-d); border-color: var(--orange-line); white-space: normal; }
+.cond { display: flex; flex-direction: column; gap: 6px; }
+.cond-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 4px; align-items: center; }
+.cond-row select, .cond-row input { width: 100%; min-width: 0; }
+.cond-tools { display: flex; gap: 8px; align-items: center; }
+.route { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--orange-line); padding-top: 6px; }
+.sim-scenario { padding: 4px 14px; border-bottom: 1px solid var(--line); }
+.sim-scenario textarea { width: 100%; font-family: Consolas, monospace; font-size: 12px; }
+.map-list-row .map-name { font-weight: 700; }
+.list-badge { background: var(--orange); color: #fff; margin-right: 4px; }
+.body-preview { margin: 6px 0; }
+.body-preview pre.json { max-height: 220px; }
+.pr-box { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 
 /* simulazione */
 .board.sim .cell.st-ok { background: var(--ok-l); }
@@ -352,20 +376,12 @@ ul.help li { margin-bottom: 3px; }
 pre.json { background: var(--navy); color: #d6e4ef; padding: 12px; border-radius: 6px; font-size: 12px; overflow: auto; margin: 0; }
 
 /* execution plan */
-.bpmn-preview { display: flex; flex-direction: column; gap: 6px; }
-.bpmn-toolbar { display: flex; align-items: center; gap: 6px; }
-.bpmn-canvas { height: 62vh; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
-.bpmn-status { font-size: 12px; }
-.engines { display: grid; grid-template-columns: 230px 1fr; gap: 14px; min-height: 60vh; }
-.engine-list { display: flex; flex-direction: column; gap: 6px; }
-.engine { justify-content: flex-start; text-align: left; white-space: normal; }
-.engine.active { background: var(--blue); color: #fff; border-color: var(--blue); }
-.engine-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.engine-notes { background: #f6f8fa; border-radius: 6px; padding: 8px 8px 8px 26px; font-size: 12px; }
-.engine-files { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.engine-pre { max-height: 46vh; white-space: pre; }
 .plan-tree { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
-.plan-tree-svg { display: block; }
+.plan-graph { display: flex; flex-direction: column; gap: 6px; }
+.plan-graph-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.plan-graph-scroll { max-height: 66vh; cursor: grab; }
+.plan-graph-svg .pg-node:hover { filter: brightness(1.08); }
+.plan-graph-svg { display: block; }
 .plan-head h3 { margin: 0 0 4px; }
 .plan-kpi { display: flex; gap: 8px; margin: 10px 0; }
 .plan-kpi .kpi { min-width: 90px; }

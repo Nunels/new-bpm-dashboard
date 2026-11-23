@@ -26,7 +26,7 @@ class DashboardJsTest {
     }
 
     @Test
-    void demoOfferIsValidExportsDslAndRoundTrips() {
+    void demoOfferIsValidAndExportsDsl() {
         JsonNode seed = js.seed();
         JsonNode offer = seed.get("offers").get(0);
         JsonNode r = js.analyze(seed, offer);
@@ -34,7 +34,6 @@ class DashboardJsTest {
         assertEquals(2, r.get("files").size());
         assertTrue(r.at("/files/0/content").asText().contains("generator: offer-process-designer"));
         assertEquals("COMPLETED", r.at("/simulation/status").asText());
-        assertTrue(r.at("/roundTrip/ok").asBoolean(), r.at("/roundTrip/errors").toString());
         assertEquals(5, js.steps().size());
     }
 
