@@ -170,10 +170,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid #9cc3dd; border-c
 .step-head:first-of-type { }
 .step-n { background: var(--step); color: #fff; border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 0; }
 .step-head.drop-over { border-color: var(--orange); background: var(--orange-l); }
-.cell { border-top: 1px solid #eef1f4; transition: background .1s; }
+.cell { border-top: 2px solid #cdd5dd; transition: background .1s; }
 .cell.odd, .prod-label.odd { background: #fafbfc; }
 .cell.drop-over { background: var(--orange-l) !important; outline: 2px dashed var(--orange); outline-offset: -3px; }
-.prod-label { padding: 8px 10px; border-top: 1px solid #eef1f4; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.prod-label { padding: 8px 10px; border-top: 2px solid #cdd5dd; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
 .prod-name { font-weight: 700; font-size: 14px; }
 .prod-actions { display: flex; gap: 0; opacity: .5; }
 .prod-label:hover .prod-actions { opacity: 1; }

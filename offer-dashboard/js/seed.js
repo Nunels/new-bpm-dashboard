@@ -258,6 +258,11 @@ window.SEED = {
         { id: 'B_D_PREG', taskId: 'PREGIUDIZIEVOLI', stepId: 'VERTICALI', products: ['CONTO', 'EVO'], dependsOn: [],
           config: { when: { join: 'AND', clauses: [{ left: 'cliente.documento.tipo', op: '!=', value: 'CI' }] } } },
         // BO: asincrono con callback, la lista dei documenti parte solo se ce ne sono (condizione su lista)
+        // Rami separati dopo Cribis e dopo Pregiudizievoli, che si riuniscono in un join
+        { id: 'B_D_V_ORACOLO', taskId: 'ORACOLO', stepId: 'VERTICALI', products: ['CONTO'], dependsOn: ['B_D_CRIBIS'] },
+        { id: 'B_D_V_AVVISO', taskId: 'COMUNICAZIONI', stepId: 'VERTICALI', products: ['CONTO', 'EVO'], dependsOn: ['B_D_PREG'],
+          config: { inputMapping: { template: 'AVVISO_PREGIUDIZIEVOLI' } } },
+        { id: 'B_D_V_JOIN', taskId: 'PREGIUDIZIEVOLI', stepId: 'VERTICALI', products: ['CONTO'], dependsOn: ['B_D_V_ORACOLO', 'B_D_V_AVVISO'] },
         { id: 'B_D_BO', taskId: 'PRESA_IN_CARICO_BO', stepId: 'BO', products: ['CONTO', 'EVO', 'TIM'], dependsOn: [],
           config: { when: { join: 'AND', clauses: [{ left: 'pratica.documenti[]', op: 'countGt', value: '0' }] } } },
         { id: 'B_D_ATT_BANCA', taskId: 'ATTIVAZIONE_BANCARIA', stepId: 'ATTIVAZIONI', products: ['CONTO', 'EVO'], dependsOn: [] },
