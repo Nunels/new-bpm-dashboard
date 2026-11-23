@@ -62,22 +62,12 @@
     return window.Fields.classify(src, plan && plan.practice ? plan.practice.roots : null);
   }
 
-  /* Attività di uno step, separando quelle "non attese" (regola Non attendere del gate in uscita). */
-  function splitStep(step) {
-    const dontWait = step.exitGate ? step.exitGate.effectivePolicy.dontWait : [];
-    const detached = [];
-    const stages = [];
-    step.stages.forEach(function (st) {
-      const main = st.activities.filter(function (a) {
-        if (dontWait.indexOf(a.activityId) >= 0) { detached.push(a); return false; }
-        return true;
-      });
-      if (main.length) stages.push({ stage: st.stage, execution: main.length > 1 ? 'PARALLEL' : 'SINGLE', activities: main });
-    });
-    const mainActs = [].concat.apply([], stages.map(function (s) { return s.activities; }));
-    return { stages: stages, detached: detached, branches: window.Model.branches(mainActs, function (a) { return a.activityId; }) };
+  /* Id dei blocchi "non attesi": quelli indicati da una regola Non attendere di un gate. */
+  function detachedIds(plan) {
+    const ids = [];
+    plan.gates.forEach(function (g) { g.effectivePolicy.dontWait.forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); }); });
+    return ids;
   }
-
   /* Attività riferita da esiti.<X>.<campo>: X può essere l'id del blocco o l'id del task. */
   function findActivity(plan, ref) {
     let found = null;
@@ -85,11 +75,7 @@
     return found;
   }
 
-  function allActivities(plan) {
-    const r = [];
-    plan.steps.forEach(function (s) { s.stages.forEach(function (st) { st.activities.forEach(function (a) { r.push(a); }); }); });
-    return r;
-  }
+  function allActivities(plan) { return plan.activities.slice(); }
 
   function hasKoTask(a) { return !!a.outcomes.KO_WITH_TASK; }
   function isAsync(a) { return a.executionType === 'ASYNC_CALLBACK'; }
@@ -100,7 +86,7 @@
     register: function (e) { list.push(e); },
     get: function (id) { return list.find(function (e) { return e.id === id; }); },
     xml: xml, sid: sid, kebab: kebab, snake: snake, toYaml: toYaml,
-    source: source, splitStep: splitStep, findActivity: findActivity, allActivities: allActivities,
+    source: source, detachedIds: detachedIds, findActivity: findActivity, allActivities: allActivities,
     hasKoTask: hasKoTask, isAsync: isAsync, perProduct: perProduct,
     BASE_URL: 'https://api.example.internal'
   };

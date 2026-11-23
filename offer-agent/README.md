@@ -17,9 +17,9 @@ Il modello non scrive il DSL: produce un JSON piccolo e controllabile, e il DSL 
 | Controllo | Esito se fallisce |
 |---|---|
 | JSON leggibile (accettato anche dentro un blocco di codice ```json) | errore → correzione |
-| Schema della risposta (`../offer-dashboard/schema/offer-generation.schema.json`) con gli **id del catalogo come enum**: il modello non può inventare prodotti, task o step | errore → correzione |
-| Id di blocchi e barre univoci | errore → correzione |
-| Validazione della dashboard: compatibilità task/prodotto, step, dipendenze circolari o tra step, regole che puntano a blocchi inesistenti, coda mancante per "KO con task" | errori → correzione; avvisi → WARNING |
+| Schema della risposta (`../offer-dashboard/schema/offer-generation.schema.json`) con gli **id del catalogo come enum**: il modello non può inventare prodotti o task | errore → correzione |
+| Id di blocchi e barre univoci (stesso spazio di nomi: `dependsOn` li referenzia entrambi) | errore → correzione |
+| Validazione della dashboard: compatibilità task/prodotto, dipendenze circolari o inesistenti, grafo non riducibile a sequenze e rami paralleli, regole che puntano a blocchi inesistenti, coda mancante per "KO con task" | errori → correzione; avvisi → WARNING |
 | DSL generato: schema ufficiale DSL 1.0.0 e perimetro dell'interprete Temporal | errore |
 | Simulazione con tutti gli esiti OK: deve arrivare a COMPLETED | avviso |
 | `assumptions` del modello: scelte fatte dove la specifica era ambigua, o richieste fuori catalogo | avvisi |
@@ -84,7 +84,7 @@ Poi carica un file di `src/test/resources/specs`. Con un file chiamato `irrepara
 - esiti SUCCESS, WARNING (assunzioni, richieste fuori catalogo) ed ERROR (errore permanente dopo 3 tentativi, chiave rifiutata);
 - correzione riuscita al secondo tentativo, con gli errori inviati al modello;
 - nuovo tentativo su errore 503, JSON dentro un blocco di codice;
-- contenuto della richiesta: chiave nell'header, schema con gli enum del catalogo e senza l'ultimo step per le barre, specifica tra delimitatori;
+- contenuto della richiesta: chiave nell'header, schema con gli enum del catalogo e gate con `dependsOn` (nessuno step), specifica tra delimitatori;
 - dashboard servita dal backend.
 
 `DashboardJsTest` verifica che il codice della dashboard in GraalJS dia lo stesso risultato del browser.
@@ -93,12 +93,12 @@ Set di valutazione in `src/test/resources/specs` (dati fittizi), ciascuno con l'
 
 | Specifica | Cosa mette alla prova | Esito atteso |
 |---|---|---|
-| `conto-mono.md` | sequenza nello step, "ferma tutto se KO" | SUCCESS |
+| `conto-mono.md` | sequenza di blocchi e gate, "ferma tutto se KO" | SUCCESS |
 | `famiglia.md` | blocco condiviso, back office asincrono con callback e task manuale, retry, una chiamata per prodotto, mail | SUCCESS |
 | `conto-tim-ambigua.md` | linguaggio vago, "non aspettare" | WARNING (3 assunzioni) |
 | `casa-fuori-catalogo.md` | prodotto e attività non nel catalogo | WARNING (non inventati) |
 
-Con il **modello reale**, solo dopo l'autorizzazione, `EvalRunner` esegue le specifiche e confronta le offerte con quelle attese: prodotti, blocchi (step + task + prodotti), dipendenze e regole delle barre, con un punteggio da 0 a 1.
+Con il **modello reale**, solo dopo l'autorizzazione, `EvalRunner` esegue le specifiche e confronta le offerte con quelle attese: prodotti, blocchi (task + prodotti), dipendenze e regole delle barre, con un punteggio da 0 a 1.
 ```powershell
 $env:GEMINI_API_KEY = "..."; mvn -q test-compile exec:java "-Dexec.mainClass=it.sim.agent.EvalRunner" "-Dexec.classpathScope=test"
 ```

@@ -100,7 +100,7 @@ public class FakeGemini implements QuarkusTestResourceLifecycleManager {
                 case "riparabile.md" -> {
                     if (!repair) {
                         ObjectNode bad = (ObjectNode) JSON.readTree(expected("conto-mono.md"));
-                        // dipendenza verso un blocco di un altro step: errore di validazione
+                        // dipendenza circolare (B_ORACOLO -> B_CRIBIS -> G_PRELIMINARI -> B_ORACOLO): errore di validazione
                         ((ObjectNode) bad.at("/offer/blocks/1")).putArray("dependsOn").add("B_CRIBIS");
                         ok(ex, bad.toString());
                     } else {

@@ -58,7 +58,7 @@
     const s = X.source(i.source, plan);
     if (s.kind === 'none') return 'null';
     if (s.kind === 'literal') return JSON.stringify(s.value);
-    if (s.kind === 'system') return s.path === 'offerta.prodotti' ? (a ? targetsExpr(a) : '$context.activeProducts') : (scope.prod || 'null');
+    if (s.kind === 'system') return s.path === 'offerta.prodotti' ? (a ? targetsExpr(a) : '$context.offerProducts') : (scope.prod || 'null');
     if (s.kind === 'item') return scope.item ? pathChain(scope.item, s.path ? s.path.split('.') : [], noPick) : 'null';
     if (s.kind === 'productPath') {
       if (!scope.prod) return 'null';
@@ -165,13 +165,13 @@
   }
 
   /*
-   * Prodotti su cui l'attività va eseguita: quelli ancora in corsa tra i suoi, esclusi i prodotti andati in KO
-   * nei blocchi da cui dipende (come fa il simulatore della dashboard).
+   * Prodotti su cui l'attività va eseguita: i suoi, esclusi quelli già KO o esclusi a monte
+   * (nei nodi da cui dipende, anche indirettamente: lo scrive ogni blocco/gate in $context.dead).
    */
   function targetsExpr(a) {
-    const base = '[$context.activeProducts[] | select(' + jqAnyOf(a.products) + ')]';
+    const base = '[$context.offerProducts[] | select(' + jqAnyOf(a.products) + ')]';
     if (!a.dependsOn.length) return base;
-    return '(' + base + ' - (' + a.dependsOn.map(function (d) { return '($context.koByBlock[' + JSON.stringify(d) + '] // [])'; }).join(' + ') + '))';
+    return '(' + base + ' - (' + deadOf(a.dependsOn) + '))';
   }
 
   function productsExpr(a) {
@@ -301,7 +301,7 @@
       ? ', esitiByProduct: (($context.esitiByProduct // {}) + { "' + a.activityId + '": (($context.esitiByProduct["' + a.activityId + '"] // {}) + { ($product): $output }) })'
       : '';
     return {
-      as: '${ $context + { esiti: (($context.esiti // {}) + { "' + a.activityId + '": $output }), koProducts: ((($context.koProducts // []) + ' + ko + ') | unique), koByBlock: (($context.koByBlock // {}) + { "' + a.activityId + '": ((($context.koByBlock["' + a.activityId + '"] // []) + ' + ko + ') | unique) })' + byProduct + ' } }'
+      as: '${ $context + { esiti: (($context.esiti // {}) + { "' + a.activityId + '": $output }), koByBlock: (($context.koByBlock // {}) + { "' + a.activityId + '": ((($context.koByBlock["' + a.activityId + '"] // []) + ' + ko + ') | unique) })' + byProduct + ' } }'
     };
   }
 
@@ -320,15 +320,16 @@
       const config = JSON.parse(JSON.stringify(b.config || {}));
       // ramo non atteso: il corpo è nel sotto-workflow, quindi il retry resta nei metadata
       if (!detached) config.retry = { intervalSec: (b.config && b.config.retry && b.config.retry.intervalSec) || 0 };
-      m.block = { id: b.id, taskId: b.taskId, stepId: b.stepId, products: b.products.slice(), dependsOn: b.dependsOn.slice(), config: config };
+      m.block = { id: b.id, taskId: b.taskId, products: b.products.slice(), dependsOn: b.dependsOn.slice(), config: config };
     }
     return m;
   }
 
-  function gateMeta(plan, st, pol) {
+  function gateMeta(plan, g) {
     const src = plan.source && plan.source.offer;
-    const m = { description: pol.description.join(' · '), afterStep: st.stepId };
-    if (src) m.gates = src.gates.filter(function (g) { return g.afterStep === st.stepId; }).map(function (g) { return { id: g.id, note: g.note || '', rules: g.rules }; });
+    const m = { description: g.effectivePolicy.description.join(' · '), gateId: g.gateId, kind: g.kind, dependsOn: g.dependsOn.join(',') };
+    const sg = src && src.gates.find(function (x) { return x.id === g.gateId; });
+    if (sg) m.gate = { id: sg.id, dependsOn: sg.dependsOn.slice(), note: sg.note || '', rules: sg.rules };
     return m;
   }
 
@@ -339,6 +340,18 @@
       blockOrder: src.blocks.map(function (b) { return b.id; }), gateOrder: src.gates.map(function (g) { return g.id; }) };
     if (src.generation) offer.generation = src.generation;
     return Object.assign({}, CANONICAL, { offer: offer });
+  }
+
+  /* Prodotti già KO o esclusi a monte di un nodo: unione di quelli registrati nei nodi da cui dipende (jq, senza ${ }). */
+  function deadOf(ids) {
+    return ids.length ? ids.map(function (d) { return '($context.dead[' + JSON.stringify(d) + '] // [])'; }).join(' + ') : '[]';
+  }
+  /* Prodotti KO/esclusi dopo un blocco: quelli a monte più i propri KO. Si scrive sempre, anche se il blocco è saltato. */
+  function deadSettle(a) {
+    return '((' + deadOf(a.dependsOn) + ') + (($context.koByBlock // {})[' + JSON.stringify(a.activityId) + '] // [])) | unique';
+  }
+  function setDead(id, expr) {
+    return '${ $context + { dead: (($context.dead // {}) + { ' + JSON.stringify(id) + ': ' + expr + ' }) } }';
   }
 
   function unit(plan, a) {
@@ -386,17 +399,22 @@
       };
       steps.push(m);
     }
-    const item = {};
     const cond = a.when ? '${ ' + whenExpr(plan, a.when, a) + ' }' : null;
+    let run;
     if (X.perProduct(a)) {
-      // la condizione si valuta per prodotto, dentro il for (è lì che esiste $product)
+      // la condizione si valuta per prodotto, dentro il for (è lì che esiste $product); con nessun prodotto il for non gira
       const body = cond ? [{ [k + '-when']: { if: cond, do: steps } }] : steps;
-      item[k] = { for: { each: 'product', in: '${ ' + targetsExpr(a) + ' }' }, do: body };
+      run = { for: { each: 'product', in: '${ ' + targetsExpr(a) + ' }' }, do: body };
     } else {
-      item[k] = { do: steps };
-      if (cond) item[k].if = cond;
+      // una chiamata per N prodotti: parte solo se resta almeno un prodotto (e se la condizione è vera)
+      run = { if: '${ ((' + targetsExpr(a) + ') | length) > 0' + (a.when ? ' and ' + whenExpr(plan, a.when, a) : '') + ' }', do: steps };
     }
-    item[k].metadata = blockMeta(plan, a);
+    // il blocco registra sempre i prodotti KO/esclusi (anche se è stato saltato), così i nodi successivi li ereditano
+    const item = {};
+    item[k] = {
+      do: [{ [k + '-run']: run }, { [k + '-settle']: { set: { dead: '${ ' + deadSettle(a) + ' }' }, export: { as: setDead(a.activityId, '$output.dead') } } }],
+      metadata: blockMeta(plan, a)
+    };
     return item;
   }
 
@@ -405,7 +423,7 @@
   }
 
   function initTask(products) {
-    return { 'init-offer': { set: { activeProducts: products, koProducts: [], esiti: {}, esitiByProduct: {} }, export: { as: '${ $output }' } } };
+    return { 'init-offer': { set: { offerProducts: products, dead: {}, koByBlock: {}, esiti: {}, esitiByProduct: {} }, export: { as: '${ $output }' } } };
   }
 
   /* Schema dell'input generale: dal modello della pratica; senza campi resta il vecchio schema pratica + cliente. pratica.id c'è sempre (correlazione degli eventi). */
@@ -416,166 +434,182 @@
     return Fields.toSchema(all.map(function (f) { return f.name === 'pratica.id' ? Object.assign({}, f, { required: true }) : f; }));
   }
 
-  /* ---------------- instradamento dei gate (ROUTE) ---------------- */
-  /* Regole ROUTE di uno step del piano, con la chiave del contatore di cicli (gate + posizione della regola). */
-  function routesOf(plan, st) {
-    const r = [];
-    st.exitGate.gates.forEach(function (g) {
-      g.rules.forEach(function (rule, i) { if (rule.type === 'ROUTE') r.push({ key: g.gateId + '-' + i, gateId: g.gateId, rule: rule }); });
-    });
-    return r;
-  }
-  function destIndex(plan, stepId) { return plan.steps.findIndex(function (x) { return x.stepId === stepId; }); }
+  /* ---------------- gate e instradamenti (ROUTE) ---------------- */
   function loopCount(key) { return '(($context.loops // {})[' + JSON.stringify(key) + '] // 0)'; }
   function routeMeta(list, description) {
     return { description: description, routes: list.map(function (r) { return { gate: r.gateId, text: r.rule.when.text + ' → ' + r.rule.to }; }) };
   }
-
-  /* Task di ritorno: conta il giro, azzera KO e esiti-KO dei blocchi che verranno rieseguiti e salta allo step di destinazione. */
-  function loopTask(plan, r, fromIdx) {
-    const to = destIndex(plan, r.rule.to);
-    const ids = [];
-    plan.steps.forEach(function (st, i) {
-      if (i >= to && i <= fromIdx) st.stages.forEach(function (stg) { stg.activities.forEach(function (a) { ids.push(a.activityId); }); });
-    });
+  function stopRaise(title) { return { error: { type: ERR + 'offer-stopped', status: 409, title: title } }; }
+  function dropKeys(field, ids) {
     const keep = ids.map(function (id) { return '.key != ' + JSON.stringify(id); }).join(' and ') || 'true';
+    return field + ': ((($context.' + field + ' // {}) | to_entries | map(select(' + keep + ')) | from_entries))';
+  }
+
+  /* Regole ROUTE di un gate del piano, con la chiave del contatore di cicli (gate + posizione della regola). */
+  function routesOf(g) {
+    const r = [];
+    g.rules.forEach(function (rule, i) { if (rule.type === 'ROUTE') r.push({ key: g.gateId + '-' + i, gateId: g.gateId, rule: rule }); });
+    return r;
+  }
+
+  /* Ripartisce le regole ROUTE di un gate: ritorni/stop prima delle regole KO, salti dopo; nei rami paralleli restano solo gli stop. */
+  function routeParts(plan, g) {
+    const topIdx = plan.top.indexOf(g.gateId);
+    const isTop = topIdx >= 0;
+    const parts = { isTop: isTop, early: [], forward: [], stops: [] };
+    routesOf(g).forEach(function (r) {
+      if (r.rule.to === 'STOP') { (isTop ? parts.early : parts.stops).push(r); return; }
+      const di = plan.top.indexOf(r.rule.to);
+      if (!isTop || di < 0) return;
+      (di <= topIdx ? parts.early : parts.forward).push(r);
+    });
+    return parts;
+  }
+
+  /* Nome del primo task generato per un nodo: serve come destinazione dei ritorni e dei salti. */
+  function entryName(plan, id) {
+    const g = plan.gates.find(function (x) { return x.gateId === id; });
+    if (!g) return X.kebab(id);
+    const p = routeParts(plan, g);
+    const s = X.kebab(g.gateId);
+    if (p.early.length) return 'gate-' + s + '-route';
+    if (g.effectivePolicy.stopOnKo) return 'gate-' + s + '-stop';
+    if (p.stops.length) return 'gate-' + s + '-stop-route-1';
+    return 'gate-' + s + '-apply';
+  }
+
+  /* Task di ritorno: conta il giro, azzera KO ed esiti dei nodi che verranno rieseguiti e torna al nodo di destinazione. */
+  function loopTask(plan, r) {
+    const ids = plan.order.slice(plan.order.indexOf(r.rule.to), plan.order.indexOf(r.gateId) + 1);
     const loops = '($context.loops // {})';
     return {
       set: { routedTo: r.rule.to },
-      export: { as: '${ $context + { loops: (' + loops + ' + { ' + JSON.stringify(r.key) + ': (' + loopCount(r.key) + ' + 1) }), koProducts: [], koByBlock: (($context.koByBlock // {}) | to_entries | map(select(' + keep + ')) | from_entries) } }' },
-      then: 'step-' + X.kebab(r.rule.to),
+      export: { as: '${ $context + { loops: (' + loops + ' + { ' + JSON.stringify(r.key) + ': (' + loopCount(r.key) + ' + 1) }), ' + dropKeys('dead', ids) + ', ' + dropKeys('koByBlock', ids) + ' } }' },
+      then: entryName(plan, r.rule.to),
       metadata: { description: 'Ritorno a ' + r.rule.to + ' (giro ' + r.key + ', al massimo ' + r.rule.maxIterations + ')' }
     };
   }
 
-  function build(plan) {
-    const name = docName('offer-' + plan.offer.id);
-    const subflows = [];
-    const doList = [initTask(plan.products.map(function (p) { return p.id; }))];
-    const goTasks = [];
-    let needStop = false;
-    plan.steps.forEach(function (st) {
-      const sp = X.splitStep(st);
-      const s = X.kebab(st.stepId);
-      const tasks = [];
-      sp.detached.forEach(function (a) {
-        const sub = docName(name + '-' + a.activityId);
-        // il ramo "non atteso" è un sotto-workflow autonomo: riceve l'input originale + i prodotti attivi e ricostruisce il proprio contesto
-        subflows.push({
-          document: document(plan, sub, a.taskName + ' (non atteso)', 'Eseguito senza attesa dal gate dopo ' + st.name),
-          do: [{ 'init-branch': { set: { activeProducts: '${ $workflow.input.activeProducts }', koProducts: [], esiti: '${ $workflow.input.esiti // {} }', esitiByProduct: '${ $workflow.input.esitiByProduct // {} }' }, export: { as: '${ $output }' } } }, unit(plan, a)]
-        });
-        const t = {};
-        // lo schema vuole un oggetto: passo le radici dell'input originale (modello della pratica) più prodotti attivi ed esiti già raccolti
-        const roots = { pratica: true };
-        ((plan.practice && plan.practice.roots) || []).forEach(function (r) { roots[r] = true; });
-        if (!plan.practice || !plan.practice.roots.length) roots.cliente = true;
-        a.input.forEach(function (i) { const sr = X.source(i.source, plan); if (sr.kind === 'path' || sr.kind === 'productPath') roots[sr.path.split('.')[0].replace(/\[\]$/, '')] = true; });
-        whenRoots(a.when, roots);
-        const subInput = { activeProducts: '${ $context.activeProducts }', esiti: '${ $context.esiti }', esitiByProduct: '${ $context.esitiByProduct }' };
-        Object.keys(roots).forEach(function (r) { subInput[r] = '${ $workflow.input.' + r + ' }'; });
-        t['start-' + X.kebab(a.activityId)] = { run: { workflow: { namespace: NS, name: sub, version: '1.0.0', input: subInput }, await: false }, metadata: blockMeta(plan, a, true) };
-        tasks.push(t);
+  /* Task di salto avanti: i nodi saltati lasciano passare i prodotti che il gate ha lasciato passare. */
+  function skipTask(plan, r) {
+    const ids = plan.order.slice(plan.order.indexOf(r.gateId) + 1, plan.order.indexOf(r.rule.to));
+    const pass = ids.map(function (id) { return JSON.stringify(id) + ': ($context.dead[' + JSON.stringify(r.gateId) + '] // [])'; }).join(', ');
+    return {
+      set: { skippedTo: r.rule.to },
+      export: { as: '${ $context + { dead: (($context.dead // {}) + { ' + pass + ' }) } }' },
+      then: entryName(plan, r.rule.to),
+      metadata: { description: 'Salto a ' + r.rule.to + ' (nodi saltati: ' + (ids.join(', ') || 'nessuno') + ')' }
+    };
+  }
+
+  /* Task di un gate: ritorni/stop → stop su KO → registrazione dei prodotti che passano → salti. Stesso `do` del ramo a cui appartiene. */
+  function gateTasks(plan, g, env) {
+    const s = X.kebab(g.gateId);
+    const pol = g.effectivePolicy;
+    const p = routeParts(plan, g);
+    const deadIn = deadOf(g.dependsOn);
+    const tasks = [];
+    if (p.early.length) {
+      const rc = [];
+      p.early.forEach(function (r, n) {
+        const cond = whenExpr(plan, r.rule.when, null);
+        const name = 'route-' + (n + 1);
+        if (r.rule.to === 'STOP') { rc.push({ [name]: { when: '${ ' + cond + ' }', then: 'offer-stopped' } }); env.needStop = true; return; }
+        const go = 'gate-' + s + '-go-' + (n + 1);
+        rc.push({ [name]: { when: '${ ' + cond + ' and ' + loopCount(r.key) + ' < ' + r.rule.maxIterations + ' }', then: go } });
+        if (r.rule.onExceed === 'STOP') { rc.push({ [name + '-exceeded']: { when: '${ ' + cond + ' }', then: 'offer-stopped' } }); env.needStop = true; }
+        env.goTasks.push({ [go]: loopTask(plan, r) });
       });
-      /* Rami: ogni componente di dipendenze è una catena (o un albero) indipendente, in parallelo alle altre. Un join forza l'attesa a livelli. */
-      const stepName = function (suffix) { return s + '-' + suffix; };
-      const seqOfNode = function (node) {
-        const out = [unit(plan, node.ref)];
-        if (node.children.length === 1) return out.concat(seqOfNode(node.children[0]));
-        if (node.children.length > 1) {
-          const f = {};
-          f[stepName('fork-' + X.kebab(node.ref.activityId))] = { fork: { branches: node.children.map(branchOf), compete: false } };
-          out.push(f);
-        }
-        return out;
-      };
-      const branchOf = function (node) {
-        const seq = seqOfNode(node);
-        if (seq.length === 1) return seq[0];
-        const t = {};
-        t[stepName('branch-' + X.kebab(node.ref.activityId))] = { do: seq };
-        return t;
-      };
-      const componentOf = function (comp, n) {
-        if (comp.kind === 'tree') return branchOf(comp.root);
-        const seq = [];
-        comp.levels.forEach(function (lv, j) {
-          if (lv.length === 1) { seq.push(unit(plan, lv[0])); return; }
-          const f = {};
-          f[stepName('group-' + n + '-stage-' + (j + 1))] = { fork: { branches: lv.map(function (a) { return unit(plan, a); }), compete: false } };
-          seq.push(f);
-        });
-        if (seq.length === 1) return seq[0];
-        const t = {};
-        t[stepName('group-' + n)] = { do: seq };
-        return t;
-      };
-      if (sp.branches.length === 1) {
-        const c = sp.branches[0];
-        if (c.kind === 'tree') seqOfNode(c.root).forEach(function (t) { tasks.push(t); });
-        else { const t = componentOf(c, 1); const nm = Object.keys(t)[0]; if (t[nm].do && nm === stepName('group-1')) t[nm].do.forEach(function (x) { tasks.push(x); }); else tasks.push(t); }
-      } else if (sp.branches.length > 1) {
-        const f = {};
-        f[stepName('branches')] = { fork: { branches: sp.branches.map(function (c, i) { return componentOf(c, i + 1); }), compete: false } };
-        tasks.push(f);
-      }
-      if (tasks.length) { const step = {}; step['step-' + s] = { do: tasks, metadata: { step: st.name } }; doList.push(step); }
-      if (st.exitGate) {
-        const pol = st.exitGate.effectivePolicy;
-        const remaining = pol.koProducts === 'CONTINUE' ? '$context.activeProducts' : '($context.activeProducts - $context.koProducts)';
-        const routes = routesOf(plan, st);
-        const stepIdx = plan.steps.indexOf(st);
-        const early = routes.filter(function (r) { return r.rule.to === 'STOP' || destIndex(plan, r.rule.to) <= stepIdx; });
-        const forward = routes.filter(function (r) { return early.indexOf(r) < 0; });
-        if (early.length) {
-          // prima della politica KO del gate: un ritorno indietro riesegue anche i prodotti KO (che sono ancora tra gli activeProducts)
-          const rc = [];
-          early.forEach(function (r, n) {
-            const cond = whenExpr(plan, r.rule.when, null);
-            const name = 'route-' + (n + 1);
-            if (r.rule.to === 'STOP') { rc.push({ [name]: { when: '${ ' + cond + ' }', then: 'offer-stopped' } }); needStop = true; return; }
-            const go = 'gate-' + s + '-go-' + (n + 1);
-            rc.push({ [name]: { when: '${ ' + cond + ' and ' + loopCount(r.key) + ' < ' + r.rule.maxIterations + ' }', then: go } });
-            if (r.rule.onExceed === 'STOP') { rc.push({ [name + '-exceeded']: { when: '${ ' + cond + ' }', then: 'offer-stopped' } }); needStop = true; }
-            goTasks.push({ [go]: loopTask(plan, r, stepIdx) });
-          });
-          rc.push({ proceed: { then: 'continue' } });
-          const rg = {};
-          rg['gate-' + s + '-route'] = { switch: rc, metadata: routeMeta(early, 'Instradamenti prima delle regole del gate (ritorno indietro / stop)') };
-          doList.push(rg);
-        }
-        const cases = [];
-        if (pol.stopOnKo === 'ALL') cases.push({ stop: { when: '${ ($context.koProducts | length) > 0 }', then: 'offer-stopped' } });
-        else if (Array.isArray(pol.stopOnKo)) cases.push({ stop: { when: '${ ([$context.koProducts[] | select(' + jqAnyOf(pol.stopOnKo) + ')] | length) > 0 }', then: 'offer-stopped' } });
-        if (cases.length) needStop = true;
-        cases.push({ 'no-products': { when: '${ (' + remaining + ' | length) == 0 }', then: 'offer-no-products' } });
-        cases.push({ proceed: { then: 'continue' } });
-        const g = {};
-        g['gate-' + s] = { switch: cases, metadata: gateMeta(plan, st, pol) };
-        doList.push(g);
-        const ap = {};
-        ap['gate-' + s + '-apply'] = {
-          set: { activeProducts: '${ ' + remaining + ' }' },
-          export: { as: '${ $context + { activeProducts: $output.activeProducts, koProducts: [] } }' }
-        };
-        doList.push(ap);
-        if (forward.length) {
-          // dopo la politica KO: il salto in avanti vale per i prodotti che hanno superato il gate
-          const fc = forward.map(function (r, n) {
-            return { ['route-' + (n + 1)]: { when: '${ ' + whenExpr(plan, r.rule.when, null) + ' }', then: 'step-' + X.kebab(r.rule.to) } };
-          });
-          fc.push({ proceed: { then: 'continue' } });
-          const fg = {};
-          fg['gate-' + s + '-skip'] = { switch: fc, metadata: routeMeta(forward, 'Salti in avanti dopo le regole del gate') };
-          doList.push(fg);
-        }
+      rc.push({ proceed: { then: 'continue' } });
+      tasks.push({ ['gate-' + s + '-route']: { switch: rc, metadata: routeMeta(p.early, 'Instradamenti prima delle regole del gate (ritorno indietro / stop)') } });
+    }
+    if (pol.stopOnKo) {
+      const sc = pol.stopOnKo === 'ALL' ? 'true' : jqAnyOf(pol.stopOnKo);
+      tasks.push({ ['gate-' + s + '-stop']: { if: '${ ([ (' + deadIn + ')[] | select(' + sc + ') ] | length) > 0 }', raise: stopRaise('Offerta fermata da un gate (KO)') } });
+    }
+    p.stops.forEach(function (r, n) {
+      tasks.push({ ['gate-' + s + '-stop-route-' + (n + 1)]: { if: '${ ' + whenExpr(plan, r.rule.when, null) + ' }', raise: stopRaise('Offerta fermata da un instradamento del gate') } });
+    });
+    tasks.push({
+      ['gate-' + s + '-apply']: {
+        set: { dead: pol.koProducts === 'CONTINUE' ? [] : '${ (' + deadIn + ') | unique }' },
+        export: { as: setDead(g.gateId, '$output.dead') },
+        metadata: gateMeta(plan, g)
       }
     });
-    doList.push({ 'offer-completed': { set: { status: 'COMPLETED', activeProducts: '${ $context.activeProducts }' }, then: 'end' } });
-    doList.push({ 'offer-no-products': { set: { status: 'NO_PRODUCTS' }, then: 'end' } });
-    if (needStop) doList.push({ 'offer-stopped': { raise: { error: { type: ERR + 'offer-stopped', status: 409, title: 'Offerta fermata da una barra regole (KO)' } } } });
-    // destinazioni dei ritorni indietro: in fondo al do, mai raggiunte in sequenza (offer-completed/offer-no-products terminano, offer-stopped solleva)
-    goTasks.forEach(function (t) { doList.push(t); });
+    if (p.forward.length) {
+      const fc = p.forward.map(function (r, n) {
+        return { ['route-' + (n + 1)]: { when: '${ ' + whenExpr(plan, r.rule.when, null) + ' }', then: 'gate-' + s + '-skip-go-' + (n + 1) } };
+      });
+      fc.push({ proceed: { then: 'continue' } });
+      tasks.push({ ['gate-' + s + '-skip']: { switch: fc, metadata: routeMeta(p.forward, 'Salti in avanti dopo le regole del gate') } });
+      p.forward.forEach(function (r, n) { env.goTasks.push({ ['gate-' + s + '-skip-go-' + (n + 1)]: skipTask(plan, r) }); });
+    }
+    return tasks;
+  }
+
+  /* Blocco "non atteso": parte in un sotto-workflow autonomo (await: false) e il gate non lo aspetta. */
+  function detachedTask(plan, a, name, subflows) {
+    const sub = docName(name + '-' + a.activityId);
+    // il ramo "non atteso" ricostruisce il proprio contesto dall'input: prodotti, nodi già eseguiti ed esiti raccolti
+    subflows.push({
+      document: document(plan, sub, a.taskName + ' (non atteso)', 'Eseguito senza attesa dal gate'),
+      do: [{ 'init-branch': { set: { offerProducts: '${ $workflow.input.offerProducts }', dead: '${ $workflow.input.dead // {} }', koByBlock: '${ $workflow.input.koByBlock // {} }', esiti: '${ $workflow.input.esiti // {} }', esitiByProduct: '${ $workflow.input.esitiByProduct // {} }' }, export: { as: '${ $output }' } } }, unit(plan, a)]
+    });
+    const t = {};
+    // lo schema vuole un oggetto: passo le radici dell'input originale (modello della pratica) più prodotti, esclusioni ed esiti già raccolti
+    const roots = { pratica: true };
+    ((plan.practice && plan.practice.roots) || []).forEach(function (r) { roots[r] = true; });
+    if (!plan.practice || !plan.practice.roots.length) roots.cliente = true;
+    a.input.forEach(function (i) { const sr = X.source(i.source, plan); if (sr.kind === 'path' || sr.kind === 'productPath') roots[sr.path.split('.')[0].replace(/\[\]$/, '')] = true; });
+    whenRoots(a.when, roots);
+    const subInput = { offerProducts: '${ $context.offerProducts }', dead: '${ $context.dead }', koByBlock: '${ $context.koByBlock }', esiti: '${ $context.esiti }', esitiByProduct: '${ $context.esitiByProduct }' };
+    Object.keys(roots).forEach(function (r) { subInput[r] = '${ $workflow.input.' + r + ' }'; });
+    t['start-' + X.kebab(a.activityId)] = { run: { workflow: { namespace: NS, name: sub, version: '1.0.0', input: subInput }, await: false }, metadata: blockMeta(plan, a, true) };
+    return t;
+  }
+
+  function build(plan) {
+    const name = docName('offer-' + plan.offer.id);
+    if (!plan.flow && (plan.activities.length || plan.gates.length)) throw new Error('Il grafo dell\'offerta non è valido (dipendenze circolari o rami che si incrociano): correggi gli errori di validazione.');
+    const subflows = [];
+    const doList = [initTask(plan.products.map(function (p) { return p.id; }))];
+    const env = { goTasks: [], needStop: false };
+    const acts = {}, gates = {};
+    plan.activities.forEach(function (a) { acts[a.activityId] = a; });
+    plan.gates.forEach(function (g) { gates[g.gateId] = g; });
+    const detached = X.detachedIds(plan);
+    let forkN = 0, branchN = 0;
+
+    /* Sequenza = task in fila nello stesso `do`; rami paralleli = `fork` (ogni ramo è un task o un `do` di task). */
+    const tasksOf = function (n) {
+      if (n.type === 'node') {
+        if (n.kind === 'gate') return gateTasks(plan, gates[n.id], env);
+        return [detached.indexOf(n.id) >= 0 ? detachedTask(plan, acts[n.id], name, subflows) : unit(plan, acts[n.id])];
+      }
+      if (n.type === 'seq') return [].concat.apply([], n.items.map(tasksOf));
+      const f = {};
+      f['fork-' + (++forkN)] = { fork: { branches: n.items.map(branchOf), compete: false } };
+      return [f];
+    };
+    const branchOf = function (n) {
+      const ts = tasksOf(n);
+      if (ts.length === 1) return ts[0];
+      const w = {};
+      w['branch-' + (++branchN)] = { do: ts };
+      return w;
+    };
+    if (plan.flow) tasksOf(plan.flow).forEach(function (t) { doList.push(t); });
+
+    // a fine flusso restano i prodotti non KO nei nodi finali
+    const dependedOn = {};
+    plan.activities.forEach(function (a) { a.dependsOn.forEach(function (d) { dependedOn[d] = true; }); });
+    plan.gates.forEach(function (g) { g.dependsOn.forEach(function (d) { dependedOn[d] = true; }); });
+    const surv = '($context.offerProducts - (' + deadOf(plan.order.filter(function (id) { return !dependedOn[id]; })) + '))';
+    doList.push({ 'offer-completed': { set: { activeProducts: '${ ' + surv + ' }', status: '${ if (' + surv + ' | length) > 0 then "COMPLETED" else "NO_PRODUCTS" end }' }, then: 'end' } });
+    if (env.needStop) doList.push({ 'offer-stopped': { raise: { error: { type: ERR + 'offer-stopped', status: 409, title: 'Offerta fermata da un instradamento (STOP)' } } } });
+    // destinazioni dei ritorni e dei salti: in fondo al do, mai raggiunte in sequenza (offer-completed termina, offer-stopped solleva)
+    env.goTasks.forEach(function (t) { doList.push(t); });
 
     const main = {
       document: document(plan, name, plan.offer.name, (plan.offer.description || '') + ' — generato da BPM AI Offer Designer'),
@@ -593,13 +627,13 @@
     label: 'Serverless Workflow 1.0 (YAML CNCF)',
     notes: [
       'Standard aperto (DSL 1.0.0), espressioni runtime jq. Runtime per la 1.0: reference implementation del Java SDK 7.x, Lemline, Synapse (da verificare maturità). Attenzione: SonataFlow/Apache KIE implementa solo la 0.8 e non esegue questi file.',
-      'Step = task "do"; blocchi paralleli = "fork"; "1 chiamata per prodotto" = "for" sui prodotti attivi.',
+      'Sequenza = task in fila nello stesso "do"; rami paralleli = "fork" (anche annidati); "1 chiamata per prodotto" = "for" sui prodotti ancora in corsa. Solo grafi serie/parallelo: i rami che si incrociano non sono esprimibili e la validazione li segnala.',
       'Attività = "call: http" verso ' + X.BASE_URL + ' + path; retry = try/catch con retry policy.',
       'Task asincroni = "listen" sull\'evento (type = topic di callback) correlato su pratica.id; output.as ${ .[0] } prende l\'evento (il listen restituisce l\'array degli eventi consumati).',
       '"KO con task" = emit "manual-task.requested" + listen "manual-task.completed" (solo se esito KO_TASK).',
-      'Barre arancioni = "switch" (STOP → raise, nessun prodotto → fine) + "set" che aggiorna activeProducts nel contesto.',
+      'Gate = task nel ramo a cui appartengono: "switch" per ritorni/salti (solo nella sequenza principale: un "then" non esce da un "fork"), "raise" con "if" per gli STOP, "set" che registra in $context.dead[nodo] i prodotti KO/esclusi (ereditati dai nodi che ne dipendono, anche se saltati).',
       '"Non attendere" = "run: workflow" con await: false verso un sotto-workflow generato in un file separato. ATTENZIONE: Quarkus Flow 1.3.0 non rispetta await: false (attende comunque il sotto-workflow); in quel runtime serve un\'attività Java o un evento con broker (provato in quarkus-flow-sim).',
-      'Provato su Quarkus Flow 1.3.0: il YAML supera la validazione di schema e riproduce il simulatore (9 scenari su 10, vedi quarkus-flow-sim/README.md). Il runtime usa jackson-jq (non tutto jq: niente IN/1, quindi il generatore usa confronti espliciti) e in export.as l\'output del task si legge con $output, non con "."; il generatore lo rispetta.'
+      'Verifica automatica: validazione di schema DSL 1.0 e valutazione delle espressioni jq con jackson-jq nei test. Il formato a step precedente era stato provato su Quarkus Flow 1.3.0 (quarkus-flow-sim/README.md); il formato a grafo non è stato eseguito su alcun runtime. Il runtime usa jackson-jq (non tutto jq: niente IN/1, quindi il generatore usa confronti espliciti) e in export.as l\'output del task si legge con $output, non con "."; il generatore lo rispetta.'
     ],
     files: function (plan) {
       const r = build(plan);

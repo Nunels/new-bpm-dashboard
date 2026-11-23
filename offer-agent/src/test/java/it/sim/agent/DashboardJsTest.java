@@ -34,7 +34,6 @@ class DashboardJsTest {
         assertEquals(2, r.get("files").size());
         assertTrue(r.at("/files/0/content").asText().contains("generator: offer-process-designer"));
         assertEquals("COMPLETED", r.at("/simulation/status").asText());
-        assertEquals(5, js.steps().size());
     }
 
     @Test

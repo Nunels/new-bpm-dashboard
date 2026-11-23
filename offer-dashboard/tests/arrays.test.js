@@ -118,10 +118,9 @@ test('[@] legge l\'elemento del prodotto corrente; condizioni su liste nel DSL e
 
   const scenario = { practice: {}, outputs: { B_ORACOLO: { risultati: [{ prodotto: 'CONTO', esito: 'OK', score: 9 }, { prodotto: 'EVO', esito: 'KO', score: 3 }] } } };
   const sim = Simulator.run(s.data, s.offer, {}, scenario);
-  const ver = sim.steps.find(function (x) { return x.stepId === 'VERTICALI'; });
-  assert.equal(ver.blockResults.B_CRIBIS.CONTO, 'OK', 'elemento del prodotto OK e un punteggio uguale a 9');
+  assert.equal(sim.blocks.B_CRIBIS.results.CONTO, 'OK', 'elemento del prodotto OK e un punteggio uguale a 9');
   scenario.outputs.B_ORACOLO.risultati[0].esito = 'KO';
-  assert.equal(Simulator.run(s.data, s.offer, {}, scenario).steps.find(function (x) { return x.stepId === 'VERTICALI'; }).blockResults.B_CRIBIS.CONTO, 'SKIPPED_BY_CONDITION');
+  assert.equal(Simulator.run(s.data, s.offer, {}, scenario).blocks.B_CRIBIS.results.CONTO, 'SKIPPED_BY_CONDITION');
 });
 
 test('condizioni su liste: operatori, negazione e numero di elementi', function () {
@@ -179,22 +178,29 @@ test('offerta demo OFF_DEMO: valida, con tutte le funzioni, DSL e simulazione', 
   assert.deepEqual(clone(v.errors), []);
   assert.deepEqual(clone(v.warnings.map(function (w) { return w.msg; })), []);
 
-  // parallelo: tre blocchi nella stessa colonna dei preliminari
-  const pre = Model.levels(Model.blocksInStep(offer, 'PRELIMINARI')).levels;
-  assert.equal(pre.length, 1);
-  assert.equal(pre[0].length, 3);
+  // grafo libero: rami paralleli impilati nella stessa colonna, due rami separati con un gate solo per uno e un join che li riunisce
+  const st = Model.structure(offer);
+  assert.deepEqual(clone(st.errors), []);
+  const L = Model.layout(offer);
+  const lane = {};
+  L.placements.forEach(function (p) { lane[p.id] = p.lane; });
+  assert.equal(lane.B_D_ORACOLO, lane.B_D_ORACOLO2, 'Oracolo e Oracolo 2 in parallelo: stessa colonna');
+  assert.equal(lane.B_D_CRIBIS, lane.B_D_PREG, 'i due rami partono insieme');
+  assert.ok(lane.G_D_RA > lane.B_D_V_ORACOLO && lane.G_D_VER > lane.G_D_RA, 'il gate di ramo segue il suo ramo e il join riunisce');
+  assert.ok(offer.gates.some(function (g) { return g.dependsOn.length === 1; }) && offer.gates.some(function (g) { return g.dependsOn.length > 1; }), 'gate di un ramo e gate join');
   // condizioni (anche su liste e con [@]), instradamenti avanti/indietro/stop, liste in input e output
   const whens = offer.blocks.filter(function (b) { return Conditions.isActive(b.config.when); }).length;
   assert.ok(whens >= 4);
-  const kinds = offer.gates.reduce(function (acc, g) { return acc.concat(g.rules.filter(function (r) { return r.type === 'ROUTE'; }).map(function (r) { return r.to === 'STOP' ? 'stop' : Model.stepIndex(data, r.to) > Model.stepIndex(data, g.afterStep) ? 'avanti' : 'indietro'; })); }, []);
-  assert.deepEqual(clone(kinds.sort()), ['avanti', 'indietro', 'stop']);
+  const kinds = offer.gates.reduce(function (acc, g) {
+    return acc.concat(g.rules.filter(function (r) { return r.type === 'ROUTE'; }).map(function (r) { return r.to === 'STOP' ? 'stop' : st.top.indexOf(r.to) > st.top.indexOf(g.id) ? 'avanti' : 'indietro'; }));
+  }, []);  assert.deepEqual(clone(kinds.sort()), ['avanti', 'indietro', 'stop']);
 
   const main = Exporters.buildServerless(ExecutionPlan.build(data, offer)).main;
   const text = JSON.stringify(main);
-  ['gate-verticali-go-1', 'gate-preliminari-skip', 'offer-stopped', 'koByBlock', 'spedizioni', 'productOutcomes'].forEach(function (k) { assert.ok(text.indexOf(k) >= 0, k); });
+  ['gate-g-d-ver-go-1', 'gate-g-d-pre-skip', 'offer-stopped', 'koByBlock', 'spedizioni', 'productOutcomes', 'fork-1'].forEach(function (k) { assert.ok(text.indexOf(k) >= 0, k); });
   assert.ok(ctx.jsyaml.load(Exporters.toYaml(main)));
 
-  // simulazione con i dati dello scenario: Cribis KO fa tornare ai preliminari, poi si passa
+  // simulazione con i dati dello scenario: Cribis KO fa ripartire dalla verifica documento, poi si passa
   const scenario = { practice: { cliente: { documento: { tipo: 'CI' }, giaVerificato: false }, pratica: { documenti: [{ tipo: 'CI', nome: 'a.pdf' }] } }, outputs: { B_D_ORACOLO: { risultati: [{ prodotto: 'CONTO', esito: 'OK', score: 80 }, { prodotto: 'EVO', esito: 'OK', score: 80 }] } } };
   const loop = Simulator.run(data, offer, { B_D_CRIBIS: { CONTO: ['KO', 'OK'] } }, scenario);
   assert.equal(loop.final.status, 'COMPLETED', loop.final.message);

@@ -3,7 +3,6 @@
   function validateOffer(data, offer) {
     const errors = [], warnings = [], infos = [];
     const add = function (list, msg, ref) { list.push({ msg: msg, ref: ref || null }); };
-    const blockIds = offer.blocks.map(function (b) { return b.id; });
 
     if (!offer.products.length) add(errors, 'L\'offerta non contiene prodotti.', { type: 'offer' });
     offer.products.forEach(function (pid) {
@@ -16,19 +15,17 @@
       const ref = { type: 'block', id: b.id };
       const t = Model.task(data, b.taskId);
       if (!t) { add(errors, 'Blocco ' + b.id + ': task "' + b.taskId + '" non presente nel catalogo.', ref); return; }
-      const name = t.name + ' (' + Model.step(data, b.stepId).name + ')';
+      const name = t.name;
       if (!b.products.length) add(errors, name + ': nessun prodotto assegnato.', ref);
       b.products.forEach(function (pid) {
         if (offer.products.indexOf(pid) < 0) add(errors, name + ': il prodotto ' + Model.productName(data, pid) + ' non fa parte dell\'offerta.', ref);
         else if (t.compatibleProducts.indexOf(pid) < 0) add(errors, name + ': task non compatibile con ' + Model.productName(data, pid) + '.', ref);
       });
-      if (t.allowedSteps.length && t.allowedSteps.indexOf(b.stepId) < 0)
-        add(warnings, name + ': step non previsto dal catalogo (ammessi: ' + t.allowedSteps.map(function (s) { return Model.step(data, s).name; }).join(', ') + ').', ref);
       b.dependsOn.forEach(function (d) {
-        const dep = offer.blocks.find(function (x) { return x.id === d; });
-        if (!dep) add(errors, name + ': dipende da un blocco inesistente (' + d + ').', ref);
-        else if (dep.stepId !== b.stepId) add(errors, name + ': dipende da un blocco di un altro step.', ref);
-        else {
+        const dep = Model.block(offer, d);
+        if (d === b.id) add(errors, name + ' [' + b.id + ']: dipende da se stesso.', ref);
+        else if (!dep && !Model.isGate(offer, d)) add(errors, name + ' [' + b.id + ']: dipende da un nodo inesistente (' + d + ').', ref);
+        else if (dep) {
           const missing = b.products.filter(function (p) { return dep.products.indexOf(p) < 0; });
           if (missing.length) add(warnings, name + ' [' + b.id + ']: dipende da ' + dep.id + ' che non copre ' + missing.map(function (p) { return Model.productName(data, p); }).join(', ') + ': per questi prodotti l\'attesa non ha effetto.', ref);
         }
@@ -72,51 +69,59 @@
       });
     });
 
-    data.steps.forEach(function (s, i) {
-      const blocks = Model.blocksInStep(offer, s.id);
-      const lv = Model.levels(blocks);
-      if (lv.cycle.length) add(errors, s.name + ': dipendenze circolari tra blocchi (' + lv.cycle.map(function (id) { return Model.blockLabel(data, offer, id); }).join(' ↔ ') + ').', { type: 'block', id: lv.cycle[0] });
-      blocks.filter(function (b) { return (b.dependsOn || []).filter(function (d) { return blocks.some(function (x) { return x.id === d; }); }).length > 1; }).forEach(function (b) {
-        add(infos, s.name + ': "' + Model.blockLabel(data, offer, b.id) + '" dipende da più blocchi (join): i blocchi collegati formano un gruppo e si attende il completamento di ogni livello.', { type: 'block', id: b.id });
-      });
-      if (i === data.steps.length - 1) return;
-      const gates = Model.gatesAfter(offer, s.id);
-      gates.forEach(function (g) {
-        const ref = { type: 'gate', id: g.id };
-        if (!g.rules.length) add(warnings, 'Gate dopo ' + s.name + ' senza regole.', ref);
-        g.rules.forEach(function (r) {
-          if (!Model.RULE_TYPES[r.type]) add(errors, 'Gate dopo ' + s.name + ': regola sconosciuta ' + r.type + '.', ref);
-          if (r.type === 'DONT_WAIT') {
-            if (!r.blockId) add(errors, 'Gate dopo ' + s.name + ': "Non attendere" senza blocco selezionato.', ref);
-            else if (blockIds.indexOf(r.blockId) < 0) add(errors, 'Gate dopo ' + s.name + ': "Non attendere" riferisce un blocco eliminato.', ref);
-            else if (offer.blocks.find(function (b) { return b.id === r.blockId; }).stepId !== s.id)
-              add(errors, 'Gate dopo ' + s.name + ': "Non attendere" riferisce un blocco di un altro step.', ref);
-          }
-          if (r.type === 'STOP_ON_KO' && r.products) r.products.forEach(function (p) {
-            if (offer.products.indexOf(p) < 0) add(errors, 'Gate dopo ' + s.name + ': "Ferma tutto" riferisce un prodotto non in offerta.', ref);
-          });
-          if (r.type === 'ROUTE') {
-            const where = 'Gate dopo ' + s.name + ': instradamento';
-            Conditions.check(data, offer, r.when, { stepId: s.id }, { required: true }).forEach(function (c) {
-              add(c.level === 'error' ? errors : warnings, where + ': ' + c.msg + '.', ref);
-            });
-            if (r.to !== 'STOP') {
-              const dest = Model.step(data, r.to);
-              if (!r.to) add(errors, where + ': destinazione mancante.', ref);
-              else if (!dest) add(errors, where + ': lo step di destinazione "' + r.to + '" non esiste.', ref);
-              else if (!Model.blocksInStep(offer, r.to).length) add(errors, where + ': lo step di destinazione "' + dest.name + '" non ha blocchi.', ref);
-              if (!(r.maxIterations >= 1 && r.maxIterations <= Model.MAX_ITERATIONS_LIMIT))
-                add(errors, where + ': il numero massimo di ripetizioni deve essere tra 1 e ' + Model.MAX_ITERATIONS_LIMIT + '.', ref);
-              if (dest && Model.stepIndex(data, r.to) <= i) add(infos, where + ': ritorno a "' + dest.name + '" (al massimo ' + r.maxIterations + ' volte, poi ' + (r.onExceed === 'CONTINUE' ? 'si prosegue' : 'l\'offerta si ferma') + ').', ref);
-            }
-          }
-        });
-      });
-      const pol = Model.effectivePolicy(gates);
-      if (pol.conflict) add(warnings, 'Transizione ' + s.name + ' → ' + data.steps[i + 1].name + ': "Solo OK" e "Prosegui anche con KO" in conflitto, prevale "Solo OK".', gates[0] ? { type: 'gate', id: gates[0].id } : null);
-      if (!pol.explicit) add(infos, 'Transizione ' + s.name + ' → ' + data.steps[i + 1].name + ': nessuna regola sui KO, si applica il default "Manda solo gli OK".', gates[0] ? { type: 'gate', id: gates[0].id } : null);
+    // struttura: il grafo deve ridursi a sequenze e rami paralleli, altrimenti il DSL non lo esprime
+    const st = Model.structure(offer);
+    const graph = st.graph;
+    Model.structureErrors(data, offer, st).forEach(function (m, i) { add(errors, m, { type: 'block', id: st.errors[i].ids[0] }); });
+    const topIdx = {};
+    st.top.forEach(function (id, i) { topIdx[id] = i; });
+    offer.blocks.forEach(function (b) {
+      if ((graph.deps[b.id] || []).length > 1)
+        add(infos, '"' + Model.blockLabel(data, offer, b.id) + '" dipende da più nodi (join): parte quando tutti hanno finito.', { type: 'block', id: b.id });
     });
 
+    offer.gates.forEach(function (g) {
+      const ref = { type: 'gate', id: g.id };
+      const label = 'Gate ' + g.id;
+      (g.dependsOn || []).forEach(function (d) {
+        if (d === g.id) add(errors, label + ': dipende da se stesso.', ref);
+        else if (!Model.node(offer, d)) add(errors, label + ': dipende da un nodo inesistente (' + d + ').', ref);
+      });
+      if (!(graph.deps[g.id] || []).length) add(warnings, label + ': non è collegato a nessun blocco (scegli "Dopo").', ref);
+      g.rules.forEach(function (r) {
+        if (!Model.RULE_TYPES[r.type]) add(errors, label + ': regola sconosciuta ' + r.type + '.', ref);
+        if (r.type === 'DONT_WAIT') {
+          if (!r.blockId) add(errors, label + ': "Non attendere" senza blocco selezionato.', ref);
+          else if (!Model.block(offer, r.blockId)) add(errors, label + ': "Non attendere" riferisce un blocco eliminato.', ref);
+          else if ((graph.deps[g.id] || []).indexOf(r.blockId) < 0) add(errors, label + ': "Non attendere" vale solo per un blocco collegato direttamente al gate (tra i suoi "Dopo").', ref);
+          else if ((graph.kids[r.blockId] || []).length > 1) add(errors, label + ': "Non attendere" non è possibile su un blocco da cui dipendono altri nodi.', ref);
+        }
+        if (r.type === 'STOP_ON_KO' && r.products) r.products.forEach(function (p) {
+          if (offer.products.indexOf(p) < 0) add(errors, label + ': "Ferma tutto" riferisce un prodotto non in offerta.', ref);
+        });
+        if (r.type === 'ROUTE') {
+          const where = label + ': instradamento';
+          Conditions.check(data, offer, r.when, { gate: g.id }, { required: true }).forEach(function (c) {
+            add(c.level === 'error' ? errors : warnings, where + ': ' + c.msg + '.', ref);
+          });
+          if (r.to !== 'STOP') {
+            if (!r.to) add(errors, where + ': destinazione mancante.', ref);
+            else if (!Model.node(offer, r.to)) add(errors, where + ': la destinazione "' + r.to + '" non esiste.', ref);
+            else if (!st.errors.length) {
+              if (topIdx[r.to] == null) add(errors, where + ': la destinazione "' + Model.nodeName(data, offer, r.to) + '" è dentro rami paralleli: nel DSL si può saltare solo a un nodo della sequenza principale.', ref);
+              if (topIdx[g.id] == null) add(errors, where + ': il gate è dentro un ramo parallelo: ritorno e salto sono ammessi solo per i gate della sequenza principale (nel ramo resta lo STOP).', ref);
+              if (topIdx[r.to] != null && topIdx[g.id] != null && topIdx[r.to] <= topIdx[g.id])
+                add(infos, where + ': ritorno a "' + Model.nodeName(data, offer, r.to) + '" (al massimo ' + r.maxIterations + ' volte, poi ' + (r.onExceed === 'CONTINUE' ? 'si prosegue' : 'l\'offerta si ferma') + ').', ref);
+            }
+            if (!(r.maxIterations >= 1 && r.maxIterations <= Model.MAX_ITERATIONS_LIMIT))
+              add(errors, where + ': il numero massimo di ripetizioni deve essere tra 1 e ' + Model.MAX_ITERATIONS_LIMIT + '.', ref);
+          }
+        }
+      });
+      const pol = Model.effectivePolicy([g]);
+      if (pol.conflict) add(warnings, label + ': "Solo OK" e "Prosegui anche con KO" in conflitto, prevale "Solo OK".', ref);
+      if (!pol.explicit) add(infos, label + ': nessuna regola sui KO, si applica il default "Manda solo gli OK".', ref);
+    });
     return { errors: errors, warnings: warnings, infos: infos, ok: errors.length === 0 };
   }
 

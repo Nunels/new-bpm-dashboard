@@ -20,7 +20,7 @@ import com.networknt.schema.ValidationMessage;
 
 /**
  * Schema della risposta dell'agente (offer-generation.schema.json della dashboard) specializzato sul catalogo:
- * gli id ammessi di prodotti, task e step diventano enum, così il modello non può inventarli.
+ * gli id ammessi di prodotti e task diventano enum, così il modello non può inventarli.
  */
 public final class OfferSchema {
 
@@ -45,21 +45,17 @@ public final class OfferSchema {
         }
     }
 
-    /** Schema con gli enum del catalogo. steps = step fissi del processo (l'ultimo non ammette barre in uscita). */
-    public static OfferSchema forCatalog(JsonNode catalog, JsonNode steps) {
+    /** Schema con gli enum del catalogo (prodotti e task); le dipendenze tra nodi le verifica la validazione della dashboard. */
+    public static OfferSchema forCatalog(JsonNode catalog) {
         ObjectNode s = base();
         List<String> products = ids(catalog.path("products"));
         List<String> tasks = ids(catalog.path("tasks"));
-        List<String> stepIds = ids(steps);
-        List<String> gateSteps = stepIds.isEmpty() ? stepIds : stepIds.subList(0, stepIds.size() - 1);
         ObjectNode offer = (ObjectNode) s.at("/properties/offer/properties");
         enumOf((ObjectNode) offer.at("/products/items"), products);
         ObjectNode block = (ObjectNode) offer.at("/blocks/items/properties");
         enumOf((ObjectNode) block.get("taskId"), tasks);
-        enumOf((ObjectNode) block.get("stepId"), stepIds);
         enumOf((ObjectNode) block.at("/products/items"), products);
         ObjectNode gate = (ObjectNode) offer.at("/gates/items/properties");
-        enumOf((ObjectNode) gate.get("afterStep"), gateSteps);
         enumOf((ObjectNode) gate.at("/rules/items/properties/products/items"), products);
         return new OfferSchema(s);
     }

@@ -90,12 +90,14 @@ class GenerationApiTest {
         assertEquals("application/json", r.body().at("/response_format/mime_type").asText());
         JsonNode schema = r.body().at("/response_format/schema");
         assertEquals("[\"CONTO\",\"EVO\",\"LIBMIN\",\"TIM\"]", schema.at("/properties/offer/properties/products/items/enum").toString());
-        assertTrue(schema.at("/properties/offer/properties/gates/items/properties/afterStep/enum").toString().contains("ATTIVAZIONI"));
-        assertFalse(schema.at("/properties/offer/properties/gates/items/properties/afterStep/enum").toString().contains("POST_ATTIVAZIONI"));
+        JsonNode gateProps = schema.at("/properties/offer/properties/gates/items/properties");
+        assertTrue(gateProps.has("dependsOn") && !gateProps.has("afterStep"), "i gate dipendono da nodi, non da uno step");
+        assertFalse(schema.at("/properties/offer/properties/blocks/items/properties").has("stepId"));
         assertFalse(schema.toString().contains("\"pattern\""), "parole chiave non garantite rimosse");
         String prompt = r.body().get("input").asText();
         assertTrue(prompt.contains("<<<SPECIFICA") && prompt.contains("Controllo Cribis sul conto"));
         assertTrue(prompt.contains("\"compatibleProducts\""));
+        assertFalse(PromptBuilder.RULES.toLowerCase().contains("step"), "le regole non parlano di step");
     }
 
     @Test
@@ -131,10 +133,10 @@ class GenerationApiTest {
         assertEquals("SUCCESS", job.get("status").asText(), job.toString());
         assertEquals(2, job.get("attempts").size());
         assertEquals("REPAIR", job.at("/attempts/1/kind").asText());
-        assertTrue(job.at("/attempts/0/errors/0").asText().contains("dipende da un blocco di un altro step"), job.at("/attempts/0").toString());
+        assertTrue(job.at("/attempts/0/errors/0").asText().contains("Dipendenze circolari"), job.at("/attempts/0").toString());
         String repairPrompt = FakeGemini.REQUESTS.stream().map(x -> x.body().path("input").asText())
                 .filter(p -> p.contains("riparabile.md") && p.contains("ERRORI DA CORREGGERE")).findFirst().orElseThrow();
-        assertTrue(repairPrompt.contains("dipende da un blocco di un altro step"));
+        assertTrue(repairPrompt.contains("Dipendenze circolari"));
     }
 
     @Test

@@ -5,13 +5,14 @@
     "description": "Conto corrente online",
     "products": ["CONTO"],
     "blocks": [
-      { "id": "B_VERIFICA_DOCUMENTO", "taskId": "VERIFICA_DOCUMENTO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
-      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": ["B_VERIFICA_DOCUMENTO"] },
-      { "id": "B_CRIBIS", "taskId": "CRIBIS", "stepId": "VERTICALI", "products": ["CONTO"], "dependsOn": [] },
-      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] }
+      { "id": "B_VERIFICA_DOCUMENTO", "taskId": "VERIFICA_DOCUMENTO", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "products": ["CONTO"], "dependsOn": ["B_VERIFICA_DOCUMENTO"] },
+      { "id": "B_CRIBIS", "taskId": "CRIBIS", "products": ["CONTO"], "dependsOn": ["G_PRELIMINARI"] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "products": ["CONTO"], "dependsOn": ["G_VERTICALI"] }
     ],
     "gates": [
-      { "id": "G_PRELIMINARI", "afterStep": "PRELIMINARI", "note": "Se una qualsiasi verifica preliminare dà esito negativo, la pratica si ferma.", "rules": [{ "type": "STOP_ON_KO", "products": [] }] }
+      { "id": "G_PRELIMINARI", "dependsOn": ["B_ORACOLO"], "note": "Se una qualsiasi verifica preliminare dà esito negativo, la pratica si ferma.", "rules": [{ "type": "STOP_ON_KO", "products": [] }] },
+      { "id": "G_VERTICALI", "dependsOn": ["B_CRIBIS"], "note": "", "rules": [] }
     ]
   },
   "assumptions": []

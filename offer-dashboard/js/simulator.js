@@ -1,33 +1,57 @@
-/* Simulazione: dati gli esiti per blocco/prodotto, propaga i prodotti attraverso step e gate. */
+/* Simulazione: dati gli esiti per blocco/prodotto, esegue il grafo (sequenze, rami paralleli, gate) propagando i prodotti KO. */
 (function () {
   const PENDING_LIKE = ['PENDING', 'KO_TASK', 'WAITING'];
-  const MAX_PASSES = 200; // rete di sicurezza: i ritorni sono già limitati da maxIterations
+  const MAX_PASSES = 400; // rete di sicurezza: i ritorni sono già limitati da maxIterations
 
   const getPath = function (obj, path) { return Fields.getPath(obj, path); };
 
-  /* Un esito può essere un valore o una lista di valori, uno per passaggio nello step (l'ultimo vale anche per i successivi). */
+  /* Un esito può essere un valore o una lista di valori, uno per passaggio nel blocco (l'ultimo vale anche per i successivi). */
   function pick(v, pass) { return Array.isArray(v) ? v[Math.min(pass - 1, v.length - 1)] : v; }
 
   /*
    * outcomes: { blockId: { productId: 'OK' | 'KO' | 'KO_TASK' | 'PENDING' } } (default OK)
    * scenario: { practice: {…dati della pratica…}, outputs: { blockId: {…output del blocco…} } } per valutare le condizioni (when / ROUTE)
    * opts.recoverAfterLoop: dopo un ritorno indietro tutti i blocchi rieseguiti rispondono OK
-   * Ritorna per ogni passaggio negli step: prodotti in ingresso, esiti per blocco, stato per prodotto e verdetto del gate.
+   *
+   * Semantica (la stessa del DSL): un prodotto KO in un blocco viene escluso dai nodi che ne dipendono (anche indirettamente);
+   * un gate "Solo OK" lo lascia escluso, "Prosegui anche con KO" lo riammette. Un blocco saltato da una condizione è neutro.
+   * Ritorna { blocks, gates, productStatus, final, log, routes, order }: per blocco gli esiti effettivi per prodotto, per gate il verdetto.
    */
   function run(data, offer, outcomes, scenario, opts) {
     outcomes = outcomes || {};
     scenario = scenario || {};
     opts = opts || {};
-    let active = offer.products.slice();
-    const asyncPending = []; // esiti "non attesi" ancora aperti
-    const result = { steps: [], final: null, log: [], routes: [] };
+    const result = { blocks: {}, gates: {}, productStatus: {}, final: null, log: [], routes: [], order: [] };
     const log = function (msg, kind) { result.log.push({ msg: msg, kind: kind || '' }); };
-    const history = {};      // blockId -> productId -> ultimo stato (per le condizioni sull'esito di un blocco)
-    const passes = {};       // stepId -> quante volte è stato eseguito
-    const loops = {};        // chiave regola -> ritorni già fatti
+    const st = Model.structure(offer);
+    result.order = st.order.slice();
+    if (st.errors.length) {
+      result.final = { status: 'FAILED', message: 'Il grafo non è valido: ' + Model.structureErrors(data, offer, st).join(' '), active: [] };
+      return result;
+    }
+    if (!offer.products.length) { result.final = { status: 'NO_PRODUCTS', message: 'L\'offerta non contiene prodotti', active: [] }; return result; }
+
+    const graph = st.graph;
+    const order = st.order;
+    const topIdx = {};
+    st.top.forEach(function (id, k) { topIdx[id] = k; });
+    const detached = {};      // blocchi con "Non attendere" su uno dei gate
+    offer.gates.forEach(function (g) { g.rules.forEach(function (r) { if (r.type === 'DONT_WAIT' && r.blockId) detached[r.blockId] = true; }); });
+    const history = {};       // blockId -> productId -> ultimo stato (per le condizioni sull'esito di un blocco)
+    const dead = {};          // nodeId -> { prodotto: true }: prodotti KO/esclusi a questo punto del percorso
+    const pend = {};          // nodeId -> { prodotto: true }: prodotti ancora in attesa di un esito
+    const passes = {};        // nodeId -> quante volte è stato eseguito
+    const loops = {};         // chiave regola -> ritorni già fatti
+    const asyncPending = [];  // esiti "non attesi" ancora aperti
+    const executed = {};
     let guard = 0;
 
-    const koState = function (st) { return st === 'KO' || st === 'KO_IGNORED'; };
+    const union = function (ids, map) {
+      const u = {};
+      ids.forEach(function (d) { Object.keys(map[d] || {}).forEach(function (p) { u[p] = true; }); });
+      return u;
+    };
+    const koState = function (s) { return s === 'KO' || s === 'KO_IGNORED'; };
     /* Ambiente di valutazione: `block` = blocco che valuta la condizione, `pid` = prodotto corrente, `targets` = prodotti del blocco; senza blocco vale per un gate. */
     const envFor = function (block, pid, targets) {
       return {
@@ -46,11 +70,11 @@
             return ko ? 'KO' : 'OK';
           }
           const task = Model.task(data, src.taskId);
-          const pick = function (list) {
+          const choose = function (list) {
             const pr = task && task.productResults;
             return pr ? list.find(function (el) { return getPath(el, pr.productField) === pid; }) : list[0];
           };
-          const v = getPath((scenario.outputs || {})[src.id], k.field, pick);
+          const v = getPath((scenario.outputs || {})[src.id], k.field, choose);
           // il produttore ha girato per prodotto e chi legge no: riceve la lista dei risultati (come nel DSL)
           if (!Fields.hasList(k.field) && Conditions.isPerProduct(src) && !Conditions.isPerProduct(block)) return Object.keys(history[src.id] || {}).map(function () { return v; });
           return v;
@@ -58,192 +82,191 @@
       };
     };
 
-    let i = 0;
-    while (i < data.steps.length) {
-      if (++guard > MAX_PASSES) { result.final = { status: 'FAILED', message: 'Troppi passaggi: simulazione interrotta', active: [] }; return result; }
-      const step = data.steps[i];
-      const isLast = i === data.steps.length - 1;
-      const gates = Model.gatesAfter(offer, step.id);
-      const policy = Model.effectivePolicy(gates);
-      const blocks = Model.blocksInStep(offer, step.id);
-      const ordered = [].concat.apply([], Model.levels(blocks).levels);
-      const blockResults = {};
-      const productStatus = {};
-      const pass = passes[step.id] = (passes[step.id] || 0) + 1;
-      const sr = { stepId: step.id, iteration: pass, entering: active.slice(), blockResults: blockResults, productStatus: productStatus, gate: null };
-      result.steps.push(sr);
+    const reset = function (ids) {
+      ids.forEach(function (id) { delete history[id]; delete dead[id]; delete pend[id]; delete executed[id]; });
+    };
+    const names = function (ids) { return ids.map(function (p) { return Model.productName(data, p); }).join(', ') || '—'; };
 
-      if (!active.length) { sr.skipped = true; i++; continue; }
-      log('▶ ' + step.name + (pass > 1 ? ' (giro ' + pass + ')' : '') + ': entrano ' + names(data, active), 'step');
-
-      ordered.forEach(function (b) {
-        const t = Model.task(data, b.taskId);
-        const tn = t ? t.name : b.taskId;
-        blockResults[b.id] = {};
-        // stato di partenza per prodotto: dipendenze, poi condizione, poi esito scelto
-        const runnable = [];
-        b.products.forEach(function (pid) {
-          if (active.indexOf(pid) < 0) { blockResults[b.id][pid] = 'NOT_ACTIVE'; return; }
-          const depStates = b.dependsOn.map(function (d) { return (blockResults[d] || {})[pid]; }).filter(Boolean);
-          if (depStates.some(function (s) { return s === 'KO' || s === 'SKIPPED'; })) blockResults[b.id][pid] = 'SKIPPED';
-          else if (depStates.some(function (s) { return PENDING_LIKE.indexOf(s) >= 0; })) blockResults[b.id][pid] = 'WAITING';
-          else runnable.push(pid);
-        });
-        let blockCond = true;
-        if (Conditions.isActive(b.config.when) && !Conditions.isPerProduct(b)) blockCond = Conditions.evaluate(b.config.when, envFor(b, null, runnable));
-        runnable.forEach(function (pid) {
-          let st;
-          const cond = !Conditions.isActive(b.config.when) ? true : Conditions.isPerProduct(b) ? Conditions.evaluate(b.config.when, envFor(b, pid, runnable)) : blockCond;
-          if (!cond) st = 'SKIPPED_BY_CONDITION';
-          else {
-            st = opts.recoverAfterLoop && pass > 1 ? 'OK' : (pick((outcomes[b.id] || {})[pid], pass) || 'OK');
-            if (st === 'KO_TASK' && !(b.config.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0)) st = 'KO';
-            if (st === 'KO' && b.config.onKo === 'IGNORE') st = 'KO_IGNORED';
-          }
-          blockResults[b.id][pid] = st;
-        });
-        history[b.id] = history[b.id] || {};
-        b.products.forEach(function (pid) {
-          const st = blockResults[b.id][pid];
-          if (st === 'NOT_ACTIVE') return;
-          history[b.id][pid] = st;
-          const pn = Model.productName(data, pid);
-          if (st === 'KO') log('  ✖ ' + tn + ' KO per ' + pn, 'ko');
-          else if (st === 'KO_IGNORED') log('  ⚠ ' + tn + ' KO per ' + pn + ' (ignorato, non bloccante)', 'warn');
-          else if (st === 'KO_TASK') log('  ✋ ' + tn + ' KO per ' + pn + ': aperto task manuale su coda ' + (b.config.koTask.queue || '?'), 'warn');
-          else if (st === 'PENDING') log('  … ' + tn + ' in attesa di esito per ' + pn, 'warn');
-          else if (st === 'SKIPPED') log('  ⤼ ' + tn + ' non eseguito per ' + pn + ' (dipendenza KO)', '');
-          else if (st === 'SKIPPED_BY_CONDITION') log('  ⤼ ' + tn + ' saltato per ' + pn + ' (condizione non soddisfatta: ' + Conditions.describe(data, offer, b.config.when) + ')', '');
-        });
+    const runBlock = function (b) {
+      const t = Model.task(data, b.taskId);
+      const tn = t ? t.name : b.taskId;
+      const pass = passes[b.id] = (passes[b.id] || 0) + 1;
+      const deps = graph.deps[b.id];
+      const inDead = union(deps, dead), inPend = union(deps, pend);
+      const res = {};
+      const entry = result.blocks[b.id] = { results: res, passes: pass, reached: [], detached: !!detached[b.id] };
+      const runnable = [];
+      b.products.forEach(function (pid) {
+        if (offer.products.indexOf(pid) < 0) { res[pid] = 'NOT_ACTIVE'; return; }
+        if (inDead[pid]) res[pid] = 'SKIPPED';
+        else if (inPend[pid]) res[pid] = 'WAITING';
+        else runnable.push(pid);
       });
-
-      active.forEach(function (pid) {
-        let ko = false, pending = false, async = false;
-        blocks.forEach(function (b) {
-          const st = (blockResults[b.id] || {})[pid];
-          if (!st) return;
-          if (st === 'KO' || st === 'SKIPPED') ko = true;
-          else if (PENDING_LIKE.indexOf(st) >= 0) {
-            if (!isLast && policy.dontWait.indexOf(b.id) >= 0) async = true; else pending = true;
-          }
-        });
-        productStatus[pid] = ko ? 'KO' : (pending ? 'PENDING' : (async ? 'ASYNC' : 'OK'));
-        if (async) asyncPending.push({ stepId: step.id, productId: pid });
-      });
-
-      const koList = active.filter(function (p) { return productStatus[p] === 'KO'; });
-      const pendList = active.filter(function (p) { return productStatus[p] === 'PENDING'; });
-
-      if (isLast) {
-        sr.gate = null;
-        if (pendList.length) {
-          result.final = { status: 'WAITING', message: 'Processo in attesa di esiti in ' + step.name + ' per ' + names(data, pendList), active: active };
-          log('⏸ ' + result.final.message, 'warn');
-          return result;
+      let blockCond = true;
+      if (Conditions.isActive(b.config.when) && !Conditions.isPerProduct(b)) blockCond = Conditions.evaluate(b.config.when, envFor(b, null, runnable));
+      runnable.forEach(function (pid) {
+        let s;
+        const cond = !Conditions.isActive(b.config.when) ? true : Conditions.isPerProduct(b) ? Conditions.evaluate(b.config.when, envFor(b, pid, runnable)) : blockCond;
+        if (!cond) s = 'SKIPPED_BY_CONDITION';
+        else {
+          s = opts.recoverAfterLoop && pass > 1 ? 'OK' : (pick((outcomes[b.id] || {})[pid], pass) || 'OK');
+          if (s === 'KO_TASK' && !(b.config.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0)) s = 'KO';
+          if (s === 'KO' && b.config.onKo === 'IGNORE') s = 'KO_IGNORED';
+          entry.reached.push(pid);
         }
-        const done = active.filter(function (p) { return productStatus[p] !== 'KO'; });
-        result.final = { status: done.length ? 'COMPLETED' : 'FAILED', message: done.length ? 'Completati: ' + names(data, done) + (koList.length ? ' — KO in post attivazione: ' + names(data, koList) : '') : 'Nessun prodotto completato', active: done };
-        log((done.length ? '✔ ' : '✖ ') + result.final.message, done.length ? 'ok' : 'ko');
-        break;
-      }
+        res[pid] = s;
+      });
+      history[b.id] = history[b.id] || {};
+      const myDead = Object.assign({}, inDead), myPend = Object.assign({}, inPend);
+      b.products.forEach(function (pid) {
+        const s = res[pid];
+        if (s === 'NOT_ACTIVE') return;
+        history[b.id][pid] = s;
+        const pn = Model.productName(data, pid);
+        if (detached[b.id] && s !== 'SKIPPED' && s !== 'WAITING' && s !== 'SKIPPED_BY_CONDITION') {
+          log('  ⏩ ' + tn + ' non atteso (Non attendere): l\'esito per ' + pn + ' non blocca il flusso', 'warn');
+          if (PENDING_LIKE.indexOf(s) >= 0) asyncPending.push({ blockId: b.id, productId: pid });
+          return;
+        }
+        if (s === 'KO') { myDead[pid] = true; log('  ✖ ' + tn + ' KO per ' + pn, 'ko'); }
+        else if (s === 'KO_IGNORED') log('  ⚠ ' + tn + ' KO per ' + pn + ' (ignorato, non bloccante)', 'warn');
+        else if (s === 'KO_TASK') { myPend[pid] = true; log('  ✋ ' + tn + ' KO per ' + pn + ': aperto task manuale su coda ' + (b.config.koTask.queue || '?'), 'warn'); }
+        else if (s === 'PENDING') { myPend[pid] = true; log('  … ' + tn + ' in attesa di esito per ' + pn, 'warn'); }
+        else if (s === 'WAITING') myPend[pid] = true;
+        else if (s === 'SKIPPED') { myDead[pid] = true; log('  ⤼ ' + tn + ' non eseguito per ' + pn + ' (dipendenza KO)', ''); }
+        else if (s === 'SKIPPED_BY_CONDITION') log('  ⤼ ' + tn + ' saltato per ' + pn + ' (condizione non soddisfatta: ' + Conditions.describe(data, offer, b.config.when) + ')', '');
+      });
+      dead[b.id] = myDead; pend[b.id] = myPend; executed[b.id] = true;
+    };
 
-      const next = data.steps[i + 1].name;
-      if (pendList.length) {
-        sr.gate = { verdict: 'WAIT', text: 'In attesa: ' + names(data, pendList), passed: [], excluded: [] };
-        result.final = { status: 'WAITING', message: 'Gate ' + step.name + ' → ' + next + ' in attesa di esiti per ' + names(data, pendList) + ' (nessuna regola "Non attendere")', active: active };
+    /* Esegue un gate; ritorna null (si prosegue), { jump: indice } (ritorno/salto) oppure { stop: true } (la simulazione termina). */
+    const runGate = function (g, at) {
+      const pass = passes[g.id] = (passes[g.id] || 0) + 1;
+      const inDead = union(graph.deps[g.id], dead), inPend = union(graph.deps[g.id], pend);
+      const scope = Model.scopeProducts(offer, g.id, graph);
+      const inScope = function (map) { return scope.filter(function (p) { return map[p]; }); };
+      const policy = Model.effectivePolicy([g]);
+      const label = 'Gate ' + g.id;
+      const verdict = result.gates[g.id] = { verdict: 'PASS', text: '', passed: [], excluded: [], passes: pass };
+      const waiting = inScope(inPend);
+      if (waiting.length) {
+        verdict.verdict = 'WAIT'; verdict.text = 'In attesa: ' + names(waiting);
+        result.final = { status: 'WAITING', message: label + ' in attesa di esiti per ' + names(waiting) + ' (nessuna regola "Non attendere")', active: scope.filter(function (p) { return !inDead[p]; }) };
         log('⏸ ' + result.final.message, 'warn');
-        return result;
+        return { stop: true };
       }
-
-      // instradamenti prima delle regole del gate: ritorno indietro (stesso step o precedente) e stop
-      const routable = Model.routesAfter(offer, step.id).filter(function (r) { return r.rule.to === 'STOP' || !!Model.step(data, r.rule.to); });
-      const early = routable.filter(function (r) { return r.rule.to === 'STOP' || Model.stepIndex(data, r.rule.to) <= i; });
-      let routed = false;
-      for (let k = 0; k < early.length && !routed; k++) {
+      executed[g.id] = true;
+      const routes = Model.routesOf(g).filter(function (r) { return r.rule.to === 'STOP' || (topIdx[r.rule.to] != null && topIdx[g.id] != null); });
+      const early = routes.filter(function (r) { return r.rule.to === 'STOP' || topIdx[r.rule.to] <= topIdx[g.id]; });
+      for (let k = 0; k < early.length; k++) {
         const r = early[k];
-        if (!Conditions.evaluate(r.rule.when, envFor(null, null, active))) continue;
+        if (!Conditions.evaluate(r.rule.when, envFor(null, null, scope))) continue;
         const why = Conditions.describe(data, offer, r.rule.when);
         if (r.rule.to === 'STOP') {
-          sr.gate = { verdict: 'STOP', text: 'STOP: ' + why, passed: [], excluded: active.slice(), route: { to: 'STOP' } };
-          result.final = { status: 'STOPPED', message: 'Offerta fermata al gate ' + step.name + ' → ' + next + ' dall\'instradamento: ' + why, active: [] };
+          verdict.verdict = 'STOP'; verdict.text = 'STOP: ' + why; verdict.route = { to: 'STOP' };
+          result.final = { status: 'STOPPED', message: 'Offerta fermata da ' + label + ' (instradamento): ' + why, active: [] };
           log('⛔ ' + result.final.message, 'ko');
-          return result;
+          return { stop: true };
         }
         const n = loops[r.key] || 0;
-        const dest = Model.step(data, r.rule.to);
+        const destName = Model.nodeName(data, offer, r.rule.to);
         if (n >= r.rule.maxIterations) {
-          log('  ⚠ Ritorno a ' + dest.name + ' non più possibile: già ' + n + ' volte (massimo ' + r.rule.maxIterations + ')', 'warn');
+          log('  ⚠ Ritorno a ' + destName + ' non più possibile: già ' + n + ' volte (massimo ' + r.rule.maxIterations + ')', 'warn');
           if (r.rule.onExceed === 'STOP') {
-            sr.gate = { verdict: 'STOP', text: 'STOP: superato il massimo di ritorni a ' + dest.name, passed: [], excluded: active.slice(), route: { to: 'STOP' } };
-            result.final = { status: 'STOPPED', message: 'Offerta fermata al gate ' + step.name + ' → ' + next + ': superato il massimo di ' + r.rule.maxIterations + ' ritorni a ' + dest.name, active: [] };
+            verdict.verdict = 'STOP'; verdict.text = 'STOP: superato il massimo di ritorni a ' + destName; verdict.route = { to: 'STOP' };
+            result.final = { status: 'STOPPED', message: 'Offerta fermata da ' + label + ': superato il massimo di ' + r.rule.maxIterations + ' ritorni a ' + destName, active: [] };
             log('⛔ ' + result.final.message, 'ko');
-            return result;
+            return { stop: true };
           }
           continue;
         }
         loops[r.key] = n + 1;
-        const to = Model.stepIndex(data, r.rule.to);
-        for (let j = to; j <= i; j++) Model.blocksInStep(offer, data.steps[j].id).forEach(function (b) { delete history[b.id]; });
-        sr.gate = { verdict: 'ROUTE', text: 'Ritorno a ' + dest.name + ' (' + (n + 1) + '/' + r.rule.maxIterations + '): ' + why, passed: [], excluded: [], route: { to: r.rule.to, kind: 'back', n: n + 1, max: r.rule.maxIterations } };
-        result.routes.push({ from: step.id, to: r.rule.to, kind: 'back', key: r.key, n: n + 1, max: r.rule.maxIterations });
-        log('↩ Gate ' + step.name + ' → torna a ' + dest.name + ' (' + (n + 1) + '/' + r.rule.maxIterations + '): ' + why, 'gate');
-        i = to;
-        routed = true;
+        const to = order.indexOf(r.rule.to);
+        reset(order.slice(to, at + 1));
+        verdict.verdict = 'ROUTE'; verdict.text = 'Ritorno a ' + destName + ' (' + (n + 1) + '/' + r.rule.maxIterations + '): ' + why;
+        verdict.route = { to: r.rule.to, kind: 'back', n: n + 1, max: r.rule.maxIterations };
+        result.routes.push({ from: g.id, to: r.rule.to, kind: 'back', key: r.key, n: n + 1, max: r.rule.maxIterations });
+        log('↩ ' + label + ' → torna a ' + destName + ' (' + (n + 1) + '/' + r.rule.maxIterations + '): ' + why, 'gate');
+        return { jump: to };
       }
-      if (routed) continue;
 
       if (policy.stopOnKo) {
-        const scope = policy.stopOnKo === 'ALL' ? active : policy.stopOnKo;
-        const blocking = koList.filter(function (p) { return scope.indexOf(p) >= 0; });
+        const sc = policy.stopOnKo === 'ALL' ? scope : policy.stopOnKo;
+        const blocking = inScope(inDead).filter(function (p) { return sc.indexOf(p) >= 0; });
         if (blocking.length) {
-          sr.gate = { verdict: 'STOP', text: 'STOP: KO su ' + names(data, blocking), passed: [], excluded: active.slice() };
-          result.final = { status: 'STOPPED', message: 'Offerta fermata al gate ' + step.name + ' → ' + next + ' per KO su ' + names(data, blocking), active: [] };
+          verdict.verdict = 'STOP'; verdict.text = 'STOP: KO su ' + names(blocking);
+          result.final = { status: 'STOPPED', message: 'Offerta fermata da ' + label + ' per KO su ' + names(blocking), active: [] };
           log('⛔ ' + result.final.message, 'ko');
-          return result;
+          return { stop: true };
         }
       }
       let passed, excluded;
-      if (policy.koPolicy === 'CONTINUE_ON_KO' && !policy.conflict) { passed = active.slice(); excluded = []; }
-      else { passed = active.filter(function (p) { return productStatus[p] !== 'KO'; }); excluded = koList; }
-      const asyncHere = active.filter(function (p) { return productStatus[p] === 'ASYNC'; });
-      sr.gate = {
-        verdict: passed.length ? 'PASS' : 'STOP',
-        text: (passed.length ? 'Passano: ' + names(data, passed) : 'Nessun prodotto passa') + (excluded.length ? ' — esclusi: ' + names(data, excluded) : '') + (asyncHere.length ? ' — esito asincrono atteso: ' + names(data, asyncHere) : ''),
-        passed: passed, excluded: excluded
-      };
-      log((passed.length ? '➜ ' : '⛔ ') + 'Gate ' + step.name + ' → ' + next + ': ' + sr.gate.text, passed.length ? 'gate' : 'ko');
-      active = passed;
-      if (!active.length) {
-        result.final = { status: 'FAILED', message: 'Nessun prodotto supera il gate ' + step.name + ' → ' + next, active: [] };
-        return result;
-      }
+      if (policy.koPolicy === 'CONTINUE_ON_KO' && !policy.conflict) { dead[g.id] = {}; passed = scope.slice(); excluded = []; }
+      else { dead[g.id] = Object.assign({}, inDead); passed = scope.filter(function (p) { return !inDead[p]; }); excluded = inScope(inDead); }
+      pend[g.id] = {};
+      const asyncHere = asyncPending.filter(function (a) { return graph.deps[g.id].indexOf(a.blockId) >= 0; }).map(function (a) { return a.productId; });
+      verdict.verdict = passed.length ? 'PASS' : 'NONE';
+      verdict.passed = passed; verdict.excluded = excluded;
+      verdict.text = (passed.length ? 'Passano: ' + names(passed) : 'Nessun prodotto passa') + (excluded.length ? ' — esclusi: ' + names(excluded) : '') + (asyncHere.length ? ' — esito asincrono atteso: ' + names(asyncHere) : '');
+      log((passed.length ? '➜ ' : '⛔ ') + label + ': ' + verdict.text, passed.length ? 'gate' : 'ko');
 
-      // salti in avanti, dopo la politica KO del gate
-      const ahead = routable.filter(function (r) { return r.rule.to !== 'STOP' && Model.stepIndex(data, r.rule.to) > i; });
-      for (let k = 0; k < ahead.length && !routed; k++) {
+      // salti in avanti, dopo la politica KO del gate: i nodi saltati lasciano passare ciò che il gate ha lasciato passare
+      const ahead = routes.filter(function (r) { return r.rule.to !== 'STOP' && topIdx[r.rule.to] > topIdx[g.id]; });
+      for (let k = 0; k < ahead.length; k++) {
         const r = ahead[k];
-        if (!Conditions.evaluate(r.rule.when, envFor(null, null, active))) continue;
-        const to = Model.stepIndex(data, r.rule.to);
-        const dest = Model.step(data, r.rule.to);
+        if (!Conditions.evaluate(r.rule.when, envFor(null, null, scope))) continue;
+        const to = order.indexOf(r.rule.to);
         const why = Conditions.describe(data, offer, r.rule.when);
-        sr.gate.route = { to: r.rule.to, kind: 'skip' };
-        sr.gate.text += ' — salta a ' + dest.name;
-        result.routes.push({ from: step.id, to: r.rule.to, kind: 'skip', key: r.key });
-        log('⤳ Gate ' + step.name + ' → salta a ' + dest.name + ': ' + why, 'gate');
-        for (let j = i + 1; j < to; j++) result.steps.push({ stepId: data.steps[j].id, iteration: 1, entering: [], blockResults: {}, productStatus: {}, gate: null, skipped: true, routed: true });
-        i = to - 1;
-        routed = true;
+        const destName = Model.nodeName(data, offer, r.rule.to);
+        verdict.route = { to: r.rule.to, kind: 'skip' };
+        verdict.text += ' — salta a ' + destName;
+        result.routes.push({ from: g.id, to: r.rule.to, kind: 'skip', key: r.key });
+        log('⤳ ' + label + ' → salta a ' + destName + ': ' + why, 'gate');
+        order.slice(at + 1, to).forEach(function (id) {
+          dead[id] = Object.assign({}, dead[g.id]); pend[id] = {};
+          if (Model.block(offer, id)) result.blocks[id] = { results: {}, passes: 0, reached: [], skipped: true };
+          else result.gates[id] = { verdict: 'SKIPPED', text: 'Saltato dall\'instradamento', passed: [], excluded: [], passes: 0 };
+        });
+        return { jump: to };
       }
-      i++;
+      return null;
+    };
+
+    /* Esito finale per prodotto: KO se è KO in uno dei nodi finali (rami compresi), in attesa se manca un esito. */
+    const finish = function (stopped) {
+      const leaves = order.filter(function (id) { return !(graph.kids[id] || []).length && executed[id]; });
+      const fDead = union(leaves, dead), fPend = union(leaves, pend);
+      offer.products.forEach(function (p) {
+        result.productStatus[p] = stopped && result.final.status === 'STOPPED' ? 'STOPPED' : fDead[p] ? 'KO' : fPend[p] ? 'PENDING' : 'OK';
+      });
+      if (stopped) return;
+      const ok = offer.products.filter(function (p) { return result.productStatus[p] === 'OK'; });
+      const ko = offer.products.filter(function (p) { return result.productStatus[p] === 'KO'; });
+      const waiting = offer.products.filter(function (p) { return result.productStatus[p] === 'PENDING'; });
+      if (waiting.length) {
+        result.final = { status: 'WAITING', message: 'Processo in attesa di esiti per ' + names(waiting), active: ok.concat(waiting) };
+        log('⏸ ' + result.final.message, 'warn');
+      } else {
+        result.final = { status: ok.length ? 'COMPLETED' : 'FAILED', message: ok.length ? 'Completati: ' + names(ok) + (ko.length ? ' — KO: ' + names(ko) : '') : 'Nessun prodotto completato', active: ok };
+        log((ok.length ? '✔ ' : '✖ ') + result.final.message, ok.length ? 'ok' : 'ko');
+      }
+      if (asyncPending.length) {
+        result.final.message += ' — restano esiti asincroni da ricevere per: ' + asyncPending.map(function (a) { return Model.productName(data, a.productId) + ' (' + Model.nodeName(data, offer, a.blockId) + ')'; }).join(', ');
+      }
+    };
+
+    let i = 0;
+    while (i < order.length) {
+      if (++guard > MAX_PASSES) { result.final = { status: 'FAILED', message: 'Troppi passaggi: simulazione interrotta', active: [] }; return result; }
+      const b = Model.block(offer, order[i]);
+      if (b) { runBlock(b); i++; continue; }
+      const r = runGate(Model.gate(offer, order[i]), i);
+      if (r && r.stop) { finish(true); return result; }
+      i = r && r.jump != null ? r.jump : i + 1;
     }
-    if (!result.final) result.final = { status: 'NO_PRODUCTS', message: 'L\'offerta non contiene prodotti', active: [] };
-    if (asyncPending.length) {
-      result.final.message += ' — restano esiti asincroni da ricevere per: ' + asyncPending.map(function (a) { return Model.productName(data, a.productId) + ' (' + Model.step(data, a.stepId).name + ')'; }).join(', ');
-    }
+    finish(false);
     return result;
   }
-
-  function names(data, ids) { return ids.map(function (p) { return Model.productName(data, p); }).join(', ') || '—'; }
 
   window.Simulator = { run: run };
 })();

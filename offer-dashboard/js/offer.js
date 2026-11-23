@@ -14,14 +14,15 @@
   let lastSim = null;
   let dragPayload = null;         // { kind: 'task' | 'block', id }
   let paletteFilter = '';
-  let view = 'visual';            // 'visual' | 'graph' | 'model'
+  let view = 'visual';            // 'visual' | 'graph' | 'diagram' | 'model'
+  let diagramFile = 0;            // file DSL mostrato nella scheda Diagramma (0 = workflow principale)
 
   /* stato dell'interfaccia (barra task, pannello dettagli): solo preferenze, non fanno parte dei dati dell'offerta */
   const UI_KEY = 'offerDashboard.ui.v1';
   const ui = (function () {
     let s = {};
     try { s = JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { s = {}; }
-    return { paletteCollapsed: !!s.paletteCollapsed, panelCollapsed: s.panelCollapsed !== false, panelHeight: Number(s.panelHeight) > 0 ? Number(s.panelHeight) : 300 };
+    return { paletteCollapsed: !!s.paletteCollapsed, panelCollapsed: s.panelCollapsed !== false, panelHeight: Number(s.panelHeight) > 0 ? Number(s.panelHeight) : 300, diagramTheme: ['light', 'dark', 'system'].indexOf(s.diagramTheme) >= 0 ? s.diagramTheme : 'light' };
   })();
   function saveUi() {
     try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* preferenze non salvate */ }
@@ -58,7 +59,7 @@
     let title = 'Offerta: ' + o.name;
     if (selection) {
       const x = selection.type === 'block' ? o.blocks.find(function (b) { return b.id === selection.id; }) : o.gates.find(function (g) { return g.id === selection.id; });
-      if (x) title = selection.type === 'block' ? 'Blocco: ' + (Model.task(data, x.taskId) || { name: x.taskId }).name : 'Barra regole';
+      if (x) title = selection.type === 'block' ? 'Blocco: ' + (Model.task(data, x.taskId) || { name: x.taskId }).name : 'Gate ' + x.id;
     }
     const v = validation;
     const status = !v ? null : v.errors.length ? h('span', { class: 'pb-status err' }, '✖ ' + v.errors.length + (v.errors.length === 1 ? ' errore' : ' errori'))
@@ -100,9 +101,11 @@
     renderOfferbar(); renderBanner(); paintSimButton();
     $('visualview').classList.toggle('hidden', view !== 'visual');
     $('graphview').classList.toggle('hidden', view !== 'graph');
+    $('diagramview').classList.toggle('hidden', view !== 'diagram');
     $('modelview').classList.toggle('hidden', view !== 'model');
     if (view === 'model' && !modelOutput(o)) view = 'visual';
     if (view === 'graph') { renderGraphView(); return; }
+    if (view === 'diagram') { renderDiagramView(); return; }
     if (view === 'model') { renderModelJson(); return; }
     renderPalette(); renderBoard(); renderPanel(); applyPanelState(); renderSimLog();
   }
@@ -153,6 +156,7 @@
       o ? h('div', { class: 'viewtabs' },
         h('button', { class: 'tab' + (view === 'visual' ? ' active' : ''), onclick: function () { setView('visual'); } }, '▦ Visuale'),
         h('button', { class: 'tab' + (view === 'graph' ? ' active' : ''), title: 'Grafo del processo (sola lettura)', onclick: function () { setView('graph'); } }, '⬡ Grafo'),
+        h('button', { class: 'tab' + (view === 'diagram' ? ' active' : ''), title: 'Diagramma del DSL generato, con il viewer ufficiale Open Workflow (sola lettura)', onclick: function () { setView('diagram'); } }, '◇ Diagramma DSL'),
         modelOutput(o) ? h('button', { class: 'tab' + (view === 'model' ? ' active' : ''), title: 'Risposta JSON del modello (sola lettura)', onclick: function () { setView('model'); } }, '🤖 JSON modello') : null) : null
     ];
     items.flat(Infinity).forEach(function (x) { if (x) bar.append(x); });
@@ -163,7 +167,7 @@
     const p = $('palette'); p.innerHTML = '';
     p.classList.toggle('collapsed', ui.paletteCollapsed);
     const list = h('div', { class: 'palette-list' });
-    const help = 'Trascina un task sulla riga di un prodotto, dentro uno step. Rilascialo sull\'intestazione dello step per assegnarlo a tutti i prodotti compatibili. Se lo step contiene già lo stesso task, il prodotto viene aggiunto al blocco esistente (tieni premuto Alt per crearne uno separato).';
+    const help = 'Trascina un task sulla riga di un prodotto: parte dopo il nodo che lo precede su quella riga (oppure all\'inizio se la riga è vuota); nell\'ultima colonna va in coda. Se nella stessa colonna c\'è già lo stesso task su un altro prodotto, il prodotto viene aggiunto al blocco esistente (Alt = blocco separato). Il gate si trascina allo stesso modo: si inserisce dopo il nodo che lo precede (rami) oppure, dal pannello, riunisce più nodi (join).';
     p.append(
       h('div', { class: 'palette-bar' },
         h('h3', null, 'Task del catalogo'),
@@ -181,6 +185,10 @@
     list.innerHTML = '';
     const o = offer();
     const f = paletteFilter.trim().toLowerCase();
+    list.append(h('div', {
+      class: 'palette-item gate-item' + (o && !simMode ? '' : ' disabled'), draggable: !!o && !simMode, title: 'Gate: regole di passaggio (solo OK, stop su KO, ritorno/salto, non attendere). Trascinalo su una riga: si inserisce dopo il nodo che la precede.',
+      ondragstart: function (e) { hideTaskTip(); startDrag(e, { kind: 'gate' }); }, ondragend: endDrag
+    }, h('div', { class: 'pi-name' }, '⛩ Gate'), h('div', { class: 'pi-meta' }, h('span', { class: 'badge' }, 'regole'))));
     data.tasks.filter(function (t) {
       return !f || (t.name + ' ' + t.id + ' ' + (t.description || '')).toLowerCase().indexOf(f) >= 0;
     }).forEach(function (t) {
@@ -193,7 +201,6 @@
       },
         h('div', { class: 'pi-name' }, t.name),
         h('div', { class: 'pi-meta' },
-          h('span', { class: 'badge ' + t.scope }, t.scope === 'common' ? 'common' : 'verticale'),
           h('span', { class: 'badge ' + t.type }, t.type),
           h('span', { class: 'badge' }, t.callMode === 'perOffer' ? '1×N' : '1×prod'))));
     });
@@ -205,17 +212,14 @@
   function showTaskTip(anchor, t, o, usable) {
     hideTaskTip();
     const inOffer = function (pid) { return !!o && o.products.indexOf(pid) >= 0; };
-    const steps = (t.allowedSteps && t.allowedSteps.length ? t.allowedSteps : data.steps.map(function (s) { return s.id; }))
-      .map(function (id) { const s = Model.step(data, id); return s ? s.name : id; });
     taskTip = h('div', { class: 'task-tip' },
       h('div', { class: 'tt-title' }, t.name),
       t.description ? h('div', { class: 'tt-desc' }, t.description) : null,
-      h('div', { class: 'tt-row' }, h('b', null, 'Tipo: '), (t.type === 'async' ? 'asincrono (callback)' : 'sincrono') + ' · ' + (t.scope === 'common' ? 'condiviso tra più prodotti' : 'verticale') + ' · ' + (t.callMode === 'perOffer' ? '1 chiamata per N prodotti' : '1 chiamata per prodotto')),
+      h('div', { class: 'tt-row' }, h('b', null, 'Tipo: '), (t.type === 'async' ? 'asincrono (callback)' : 'sincrono') + ' · ' + (t.callMode === 'perOffer' ? '1 chiamata per N prodotti' : '1 chiamata per prodotto')),
       h('div', { class: 'tt-row' }, h('b', null, 'Prodotti compatibili:'),
         h('div', { class: 'tt-prods' }, t.compatibleProducts.map(function (pid) {
           return h('span', { class: 'tt-prod' + (inOffer(pid) ? ' on' : '') }, (inOffer(pid) ? '✓ ' : '') + pname(pid));
         }))),
-      h('div', { class: 'tt-row' }, h('b', null, 'Step ammessi: '), steps.join(', ')),
       t.api ? h('div', { class: 'tt-row' }, h('code', null, t.api.method + ' ' + t.api.path)) : null,
       usable ? null : h('div', { class: 'tt-warn' }, 'Nessun prodotto compatibile nell\'offerta'));
     document.body.appendChild(taskTip);
@@ -225,13 +229,6 @@
   }
 
   /* ---------- griglia ---------- */
-  /* Ultimo passaggio nello step: con i ritorni indietro uno step può essere eseguito più volte. */
-  function simStep(stepId) {
-    if (!lastSim) return null;
-    const all = lastSim.steps.filter(function (s) { return s.stepId === stepId; });
-    return all.length ? all[all.length - 1] : null;
-  }
-
   function simulate(o) {
     return Simulator.run(data, o, simOutcomes[o.id] || {}, ensureScenario(o), { recoverAfterLoop: !!simRecover[o.id] });
   }
@@ -264,9 +261,12 @@
     return sc;
   }
 
+  const PRODUCT_STATUS = { OK: ['✔ completato', 'ok'], KO: ['✖ escluso', 'ko'], PENDING: ['⏸ in attesa', 'pending'], STOPPED: ['⛔ fermato', 'ko'] };
+  const VERDICT_LABEL = { PASS: '➜ passa', WAIT: '⏸ attesa', STOP: '⛔ stop', ROUTE: '↩ ritorna', NONE: '⛔ nessun prodotto', SKIPPED: '⤳ saltato' };
+
   function renderBoard() {
     const board = $('board'); board.innerHTML = '';
-    board.className = 'board' + (simMode ? ' sim' : '') + (selection && selection.type === 'block' && !simMode ? ' focus' : '');
+    board.className = 'board' + (simMode ? ' sim' : '') + (selection && !simMode ? ' focus' : '');
     const o = offer();
     lastSim = null;
     if (!o) {
@@ -275,102 +275,55 @@
       return;
     }
     if (simMode) lastSim = simulate(o);
-    const steps = data.steps, prods = o.products, n = Math.max(prods.length, 1);
+    const prods = o.products, n = Math.max(prods.length, 1);
     const refSet = function (list, type) { return new Set(list.filter(function (e) { return e.ref && e.ref.type === type; }).map(function (e) { return e.ref.id; })); };
     const errBlocks = refSet(validation.errors, 'block'), warnBlocks = refSet(validation.warnings, 'block');
     const errGates = refSet(validation.errors, 'gate');
 
-    const focusSel = !!(selection && selection.type === 'block' && !simMode);
-    const cols = ['170px'], pos = {}, layouts = {};
-    let c = 2;
-    steps.forEach(function (s, i) {
-      const L = Model.layoutStep(o, s.id);
-      layouts[s.id] = L;
-      pos[s.id] = { start: c, span: L.lanes };
-      for (let k = 0; k < L.lanes; k++) cols.push(focusSel ? 'minmax(225px, 1fr)' : 'minmax(165px, 1fr)');
-      c += L.lanes;
-      if (i < steps.length - 1) { pos['G:' + s.id] = c; cols.push('150px'); c++; }
-    });
+    const L = Model.layout(o);
+    const nLv = o.blocks.length + o.gates.length ? L.lanes : 0;
+    const focusSel = !!(selection && !simMode);
+    const cols = ['170px'];
+    for (let k = 0; k < nLv; k++) {
+      const onlyGates = L.levels[k].every(function (id) { return Model.isGate(o, id); });
+      cols.push(onlyGates ? (focusSel ? '170px' : '135px') : (focusSel ? '250px' : '200px'));
+    }
+    cols.push(nLv ? '110px' : '240px');     // ultima colonna: rilascia qui per mettere in coda
     board.style.gridTemplateColumns = cols.join(' ');
+    const addCol = nLv + 2;
 
-    // ogni riga prodotto ha tante sotto-righe quante sono le corsie usate dai rami (al massimo tra gli step)
+    // ogni riga prodotto ha tante sotto-righe quante sono le corsie usate dai rami
     const sub = [];
-    for (let r = 0; r < n; r++) sub.push(1);
-    steps.forEach(function (s) {
-      for (let r = 0; r < n; r++) sub[r] = Math.max(sub[r], layouts[s.id].laneCount[r] || 1);
-    });
+    for (let r = 0; r < n; r++) sub.push(Math.max(1, L.laneCount[r] || 1));
     const rowStart = [];
     let totalRows = 0;
     sub.forEach(function (x) { rowStart.push(2 + totalRows); totalRows += x; });
     const grid = { sub: sub, rowStart: rowStart };
-    board.style.gridTemplateRows = 'auto repeat(' + totalRows + ', minmax(' + (simMode ? 112 : 92) + 'px, auto)) auto';
-    const footRow = totalRows + 2;
+    board.style.gridTemplateRows = 'auto repeat(' + totalRows + ', minmax(' + (simMode ? 112 : 92) + 'px, auto))';
 
-    board.append(h('div', { class: 'corner', style: { gridRow: 1, gridColumn: 1 } }, 'Prodotti \\ Step'));
+    board.append(h('div', { class: 'corner', style: { gridRow: 1, gridColumn: 1 } }, 'Prodotti'));
+    board.append(h('div', { class: 'col-head', style: { gridRow: 1, gridColumn: addCol }, title: 'Rilascia qui un task o un gate per metterlo in coda alla riga del prodotto' }, nLv ? '＋ in coda' : 'Trascina qui il primo task'));
+    for (let k = 0; k < nLv; k++) board.append(h('div', { class: 'col-head', style: { gridRow: 1, gridColumn: 2 + k } }, String(k + 1)));
 
-    steps.forEach(function (s, i) {
-      const p = pos[s.id];
-      const ss = simStep(s.id);
-      board.append(h('div', {
-        class: 'step-head', style: { gridRow: 1, gridColumn: p.start + ' / span ' + p.span },
-        title: 'Rilascia qui un task per assegnarlo a tutti i prodotti compatibili',
-        ondragover: allowDrop, ondragleave: leaveDrop, ondrop: function (e) { dropOnStep(e, s.id); }
-      }, h('span', { class: 'step-n' }, i + 1), s.name));
-
-      prods.forEach(function (pid, r) {
-        let st = '';
-        if (simMode) {
-          if (!ss || ss.entering.indexOf(pid) < 0) st = 'out';
-          else st = ({ OK: 'ok', KO: 'ko', PENDING: 'pending', ASYNC: 'async' })[ss.productStatus[pid]] || 'ok';
-        }
+    prods.forEach(function (pid, r) {
+      for (let c = 0; c <= nLv; c++) {
         board.append(h('div', {
-          class: 'cell' + (r % 2 ? ' odd' : '') + (st ? ' st-' + st : ''),
-          style: { gridRow: rowStart[r] + ' / span ' + sub[r], gridColumn: p.start + ' / span ' + p.span },
-          ondragover: allowDrop, ondragleave: leaveDrop, ondrop: function (e) { dropOnCell(e, s.id, pid); }
+          class: 'cell' + (r % 2 ? ' odd' : '') + (c === nLv ? ' tail' : ''),
+          style: { gridRow: rowStart[r] + ' / span ' + sub[r], gridColumn: String(2 + c) },
+          ondragover: allowDrop, ondragleave: leaveDrop, ondrop: function (e) { dropOnCell(e, pid, c); }
         }));
-      });
-
-      layouts[s.id].placements.forEach(function (pl) { renderBlock(o, pl, p, errBlocks, warnBlocks, grid).forEach(function (el) { board.append(el); }); });
-
-      if (i < steps.length - 1) {
-        const gc = pos['G:' + s.id];
-        const gates = Model.gatesAfter(o, s.id);
-        const verdict = ss && ss.gate;
-        board.append(h('div', { class: 'gate-head', style: { gridRow: 1, gridColumn: gc } },
-          simMode ? null : h('button', { class: 'small', onclick: function () { addGate(s.id); }, title: 'Aggiungi una barra di regole' }, '+ barra')));
-        board.append(h('div', { class: 'gate-col', style: { gridRow: '2 / span ' + totalRows, gridColumn: gc } },
-          gates.length ? gates.map(function (g, gi) {
-            const sel = selection && selection.type === 'gate' && selection.id === g.id;
-            return h('div', {
-              class: 'gate' + (sel ? ' selected' : '') + (errGates.has(g.id) ? ' has-error' : '') + (g.rules.some(function (r) { return r.type === 'ROUTE'; }) ? ' has-route' : ''),
-              title: g.rules.map(function (r) { return Model.ruleText(data, o, r); }).join('\n') || 'Nessuna regola',
-              onclick: function () { select('gate', g.id); }
-            }, h('span', { class: 'gate-n' }, gi + 1), g.rules.some(function (r) { return r.type === 'ROUTE'; }) ? h('span', { class: 'gate-route-mark' }, '↩') : null);
-          }) : h('div', { class: 'gate ghost', title: 'Nessuna regola: default "Manda solo gli OK". Clicca per configurare', onclick: function () { if (!simMode) addGate(s.id); } }),
-          verdict ? h('div', { class: 'verdict v-' + verdict.verdict.toLowerCase(), title: verdict.text },
-            ({ PASS: '➜ passa', WAIT: '⏸ attesa', STOP: '⛔ stop', ROUTE: '↩ ritorna' })[verdict.verdict]) : null));
-        board.append(h('div', { class: 'gate-foot', style: { gridRow: footRow, gridColumn: gc } },
-          gates.length ? gates.map(function (g, gi) {
-            return h('div', { class: 'gate-rule-text', onclick: function () { select('gate', g.id); } },
-              h('b', null, (gi + 1) + '. '),
-              g.rules.length ? g.rules.map(function (r) { return Model.ruleText(data, o, r); }).join(' · ') : h('i', null, '(nessuna regola)'));
-          }) : h('div', { class: 'muted' }, 'default: solo OK'),
-          verdict ? h('div', { class: 'gate-verdict-text' }, verdict.text) : null));
       }
+    });
+
+    L.placements.forEach(function (pl) {
+      (pl.kind === 'block' ? renderBlock(o, pl, errBlocks, warnBlocks, grid) : renderGate(o, pl, errGates, grid)).forEach(function (el) { board.append(el); });
     });
 
     prods.forEach(function (pid, r) {
       let badge = null;
       if (simMode && lastSim) {
-        const reached = lastSim.steps.filter(function (s) { return s.entering.indexOf(pid) >= 0 && !s.skipped; });
-        const last = reached[reached.length - 1];
-        const fin = lastSim.final;
-        let txt, cls;
-        if (fin.status === 'COMPLETED' && fin.active.indexOf(pid) >= 0) { txt = '✔ completato'; cls = 'ok'; }
-        else if (fin.status === 'STOPPED') { txt = '⛔ fermato'; cls = 'ko'; }
-        else if (fin.status === 'WAITING' && fin.active.indexOf(pid) >= 0) { txt = '⏸ in attesa'; cls = 'pending'; }
-        else { txt = '✖ escluso in ' + (last ? Model.step(data, last.stepId).name : '—'); cls = 'ko'; }
-        badge = h('div', { class: 'prod-status ' + cls }, txt);
+        const ps = PRODUCT_STATUS[lastSim.productStatus[pid]] || PRODUCT_STATUS.OK;
+        badge = h('div', { class: 'prod-status ' + ps[1] }, ps[0]);
       }
       board.append(h('div', { class: 'prod-label' + (r % 2 ? ' odd' : ''), style: { gridRow: rowStart[r] + ' / span ' + sub[r], gridColumn: 1 } },
         h('div', { class: 'prod-name' }, pname(pid)),
@@ -381,33 +334,33 @@
     });
 
     if (!prods.length) board.append(h('div', { class: 'empty-row', style: { gridRow: 2, gridColumn: '1 / -1' } }, 'L\'offerta non ha prodotti: aggiungili dalla barra in alto ("+ Aggiungi prodotto…").'));
-    board.append(h('div', { class: 'foot-label', style: { gridRow: footRow, gridColumn: 1 } }, 'Regole di passaggio'));
     drawArrows();
   }
 
-  /* Ruolo di un blocco rispetto al blocco selezionato: 'parent' (da cui dipende), 'child' (dipende da lui) oppure 'other'; null senza selezione. */
-  function roleToSelection(b) {
-    if (!selection || selection.type !== 'block' || simMode) return null;
-    if (selection.id === b.id) return 'self';
+  /* Ruolo di un nodo rispetto a quello selezionato: 'parent' (da cui dipende), 'child' (dipende da lui) oppure 'other'; null senza selezione. */
+  function roleToSelection(id) {
+    if (!selection || simMode) return null;
+    if (selection.id === id) return 'self';
     const o = offer();
-    const sel = o && o.blocks.find(function (x) { return x.id === selection.id; });
-    if (!sel) return null;
-    if ((sel.dependsOn || []).indexOf(b.id) >= 0) return 'parent';
-    if ((b.dependsOn || []).indexOf(sel.id) >= 0) return 'child';
+    const sel = o && Model.node(o, selection.id);
+    const me = o && Model.node(o, id);
+    if (!sel || !me) return null;
+    if ((sel.dependsOn || []).indexOf(id) >= 0) return 'parent';
+    if ((me.dependsOn || []).indexOf(sel.id) >= 0) return 'child';
     return 'other';
   }
 
-  /* Frecce tra il blocco selezionato, i suoi genitori (arancioni) e i suoi figli (verdi): overlay SVG calcolato sulle posizioni reali delle schede. */
+  /* Frecce tra il nodo selezionato, i suoi genitori (arancioni) e i suoi figli (verdi): overlay SVG calcolato sulle posizioni reali delle schede. */
   function drawArrows() {
     const board = $('board');
     const old = board.querySelector('.rel-arrows');
     if (old) old.remove();
-    if (!selection || selection.type !== 'block' || simMode) return;
+    if (!selection || simMode) return;
     const o = offer();
-    const sel = o && o.blocks.find(function (x) { return x.id === selection.id; });
+    const sel = o && Model.node(o, selection.id);
     if (!sel) return;
     const base = board.getBoundingClientRect();
-    const cardsOf = function (id) { return Array.prototype.slice.call(board.querySelectorAll('.block[data-block="' + id + '"]')); };
+    const cardsOf = function (id) { return Array.prototype.slice.call(board.querySelectorAll('[data-node="' + id + '"]')); };
     const selCards = cardsOf(sel.id);
     if (!selCards.length) return;
     const mid = function (r) { return r.top + r.height / 2; };
@@ -427,9 +380,9 @@
         d = 'M' + x1 + ',' + y1 + ' L' + (x2 - 2) + ',' + y2;
       } else {
         const key = Math.round((x1 + x2) / 2 / 20);
-        const n = used[key] = (used[key] || 0) + 1;
+        const k = used[key] = (used[key] || 0) + 1;
         const gap = x2 - x1;
-        const shift = Math.max(-gap / 2 + 14, Math.min(gap / 2 - 14, (n % 2 ? 1 : -1) * Math.ceil((n - 1) / 2) * 8));
+        const shift = Math.max(-gap / 2 + 14, Math.min(gap / 2 - 14, (k % 2 ? 1 : -1) * Math.ceil((k - 1) / 2) * 8));
         const mx = (x1 + x2) / 2 + shift;
         const sgn = y2 > y1 ? 1 : -1;
         const r = Math.min(10, Math.abs(y2 - y1) / 2, Math.abs(mx - x1), Math.abs(x2 - mx));
@@ -438,12 +391,13 @@
       }
       paths.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" marker-end="url(#' + marker + ')"/>' +
         '<circle cx="' + x1 + '" cy="' + y1 + '" r="4.5" fill="' + color + '" stroke="#fff" stroke-width="1.5"/>');
-    };    (sel.dependsOn || []).forEach(function (d) {
+    };
+    (sel.dependsOn || []).forEach(function (d) {
       const pc = cardsOf(d); if (!pc.length) return;
-      const to = nearest(selCards, mid(pc[0].getBoundingClientRect()) );
+      const to = nearest(selCards, mid(pc[0].getBoundingClientRect()));
       link(nearest(pc, mid(to)), to, '#e07b39', 'arr-o');
     });
-    o.blocks.filter(function (x) { return (x.dependsOn || []).indexOf(sel.id) >= 0; }).forEach(function (ch) {
+    Model.nodes(o).filter(function (x) { return (x.dependsOn || []).indexOf(sel.id) >= 0; }).forEach(function (ch) {
       const cc = cardsOf(ch.id); if (!cc.length) return;
       const from = nearest(selCards, mid(cc[0].getBoundingClientRect()));
       link(from, nearest(cc, mid(from)), '#2e8b57', 'arr-g');
@@ -454,40 +408,48 @@
       '<marker id="arr-o" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e07b39"/></marker>' +
       '<marker id="arr-g" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2e8b57"/></marker></defs>' + paths.join('') + '</svg>');
   }
-  function renderBlock(o, pl, p, errBlocks, warnBlocks, grid) {
+
+  /* Righe della griglia occupate da un nodo tra le righe prodotto rs..re: con una sola corsia tutta la riga, altrimenti le sue sotto-righe. */
+  function rowsOf(pl, grid, from, to) {
+    const full = function (r) { return !(pl.laneCount[r] > 1); };
+    const top = function (r) { return full(r) ? 0 : pl.rankTop[r]; };
+    const bot = function (r) { return full(r) ? grid.sub[r] - 1 : pl.rankBot[r]; };
+    return { top: top, bot: bot, span: (grid.rowStart[from] + top(from)) + ' / ' + (grid.rowStart[to] + bot(to) + 1) };
+  }
+
+  function renderBlock(o, pl, errBlocks, warnBlocks, grid) {
     const b = pl.block, t = Model.task(data, b.taskId);
     const c = b.config;
     const sel = selection && selection.type === 'block' && selection.id === b.id;
     const inOffer = b.products.filter(function (pid) { return o.products.indexOf(pid) >= 0; });
-    const depNames = b.dependsOn.map(function (d) { const x = o.blocks.find(function (y) { return y.id === d; }); const tt = x && Model.task(data, x.taskId); return tt ? tt.name : d; });
+    const depNames = b.dependsOn.map(function (d) { return Model.nodeName(data, o, d); });
+    const role = roleToSelection(b.id);
 
     // Un blocco occupa per intero la riga prodotto se la riga ha una sola corsia; altrimenti sta nelle sotto-righe della sua corsia
     // (più corsie per un join). Le righe adiacenti si fondono in una sola scheda solo se i bordi combaciano.
     const idx = inOffer.map(function (pid) { return o.products.indexOf(pid); }).sort(function (a, z) { return a - z; });
     const inSet = {};
     idx.forEach(function (i) { inSet[i] = true; });
-    const full = function (r) { return !(pl.laneCount[r] > 1); };
-    const top = function (r) { return full(r) ? 0 : pl.rankTop[r]; };
-    const bot = function (r) { return full(r) ? grid.sub[r] - 1 : pl.rankBot[r]; };
+    const rr = rowsOf(pl, grid, pl.rs, pl.re);
     const runs = [];
     for (let r = pl.rs; r <= pl.re; r++) {
       const card = !idx.length || !!inSet[r];
       const last = runs[runs.length - 1];
-      if (last && last.card === card && bot(r - 1) === grid.sub[r - 1] - 1 && top(r) === 0) {
+      if (last && last.card === card && rr.bot(r - 1) === grid.sub[r - 1] - 1 && rr.top(r) === 0) {
         last.end = r;
         if (card && inSet[r]) last.products.push(o.products[r]);
       } else runs.push({ card: card, start: r, end: r, products: card && inSet[r] ? [o.products[r]] : [] });
     }
-    const rows = function (g) { return (grid.rowStart[g.start] + top(g.start)) + ' / ' + (grid.rowStart[g.end] + bot(g.end) + 1); };
+    const rows = function (g) { return rowsOf(pl, grid, g.start, g.end).span; };
     const cards = runs.filter(function (g) { return g.card; });
 
-    const col = String(p.start + pl.lane);
+    const col = String(2 + pl.lane);
     const out = [];
-    runs.forEach(function (g, gi) {
+    runs.forEach(function (g) {
       if (!g.card) {
         // ponte tratteggiato nelle righe dei prodotti esclusi: stessa larghezza delle schede, le unisce
         out.push(h('div', {
-          class: 'block-bridge' + (sel ? ' selected' : '') + (roleToSelection(b) === 'other' ? ' dimmed' : '') + (t && t.type === 'async' ? ' async' : ''),
+          class: 'block-bridge' + (sel ? ' selected' : '') + (role === 'other' ? ' dimmed' : '') + (t && t.type === 'async' ? ' async' : ''),
           style: { gridRow: rows(g), gridColumn: col },
           title: 'Stesso blocco ' + (t ? t.name : b.taskId) + ': non include ' + o.products.slice(g.start, g.end + 1).map(pname).join(', ')
         }));
@@ -501,13 +463,13 @@
       if (t && t.type === 'async') cls.push('async');
       const cond = Conditions.isActive(c.when);
       if (cond) cls.push('conditional');
-      const role = roleToSelection(b);
       if (role === 'parent' || role === 'child') cls.push('rel-' + role);
       else if (role === 'other') cls.push('dimmed');
-      const isJoin = b.dependsOn.filter(function (d) { return o.blocks.some(function (x) { return x.id === d && x.stepId === b.stepId; }); }).length > 1;
+      const isJoin = b.dependsOn.length > 1;
+      const detached = lastSim && lastSim.blocks[b.id] && lastSim.blocks[b.id].detached;
       const showProducts = g.products.length && (!simMode && (inOffer.length > 1));
       out.push(h('div', {
-        class: cls.join(' '), 'data-block': b.id,
+        class: cls.join(' '), 'data-node': b.id,
         style: { gridRow: rows(g), gridColumn: col },
         title: cards.length > 1 ? 'Stesso blocco su ' + inOffer.map(pname).join(', ') : null,
         draggable: !simMode,
@@ -517,12 +479,13 @@
       },
         h('div', { class: 'block-title' }, t ? t.name : b.taskId + ' (?)'),
         first ? h('div', { class: 'block-badges' },
-          isJoin ? h('span', { class: 'bb join', title: 'Parte quando tutti i blocchi da cui dipende hanno finito' }, '⋈ JOIN') : null,
+          isJoin ? h('span', { class: 'bb join', title: 'Parte quando tutti i nodi da cui dipende hanno finito' }, '⋈ JOIN') : null,
           inOffer.length > 1 ? h('span', { class: 'bb' }, c.callMode === 'perOffer' ? '1 chiamata × ' + inOffer.length : inOffer.length + ' chiamate') : null,
           t && t.type === 'async' ? h('span', { class: 'bb' }, 'async') : null,
           Number(c.retry.count) > 0 ? h('span', { class: 'bb' }, 'retry ' + c.retry.count) : null,
           c.koTask.enabled && t && t.outcomes.indexOf('KO_TASK') >= 0 ? h('span', { class: 'bb' }, 'KO→task') : null,
           c.onKo === 'IGNORE' ? h('span', { class: 'bb' }, 'KO non bloccante') : null,
+          detached ? h('span', { class: 'bb', title: 'Un gate ha "Non attendere" su questo blocco' }, '⏩ non atteso') : null,
           cond ? h('span', { class: 'bb cond', title: 'Eseguito solo se ' + Conditions.describe(data, o, c.when) }, 'SE …') : null,
           c.notify.onOk || c.notify.onKo ? h('span', { class: 'bb' }, '✉') : null) : h('div', { class: 'block-cont' }, '↑ stesso blocco'),
         first && depNames.length ? h('div', { class: 'block-deps' }, '↳ dopo ' + depNames.join(', ')) : null,
@@ -532,12 +495,49 @@
     return out;
   }
 
+  /* Gate: mattoncino arancione che copre le righe dei prodotti che governa (quelli dei blocchi a monte). */
+  function renderGate(o, pl, errGates, grid) {
+    const g = pl.gate;
+    const sel = selection && selection.type === 'gate' && selection.id === g.id;
+    const role = roleToSelection(g.id);
+    const st = Model.structure(o);
+    const gi = st.top.indexOf(g.id);
+    const v = lastSim && lastSim.gates[g.id];
+    const cls = ['gatebrick'];
+    if (sel) cls.push('selected');
+    if (errGates.has(g.id)) cls.push('has-error');
+    if (role === 'parent' || role === 'child') cls.push('rel-' + role);
+    else if (role === 'other') cls.push('dimmed');
+    const routeText = function (r) {
+      if (r.to === 'STOP') return '⛔ stop';
+      const di = st.top.indexOf(r.to);
+      return (di >= 0 && gi >= 0 && di <= gi ? '↩ ' : '⤳ ') + Model.nodeName(data, o, r.to);
+    };
+    const chips = g.rules.map(function (r) {
+      const label = r.type === 'ROUTE' ? routeText(r) : RT[r.type] ? RT[r.type].short : r.type;
+      return h('span', { class: 'gb' + (r.type === 'ROUTE' ? ' route' : '') }, label);
+    });
+    return [h('div', {
+      class: cls.join(' '), 'data-node': g.id,
+      style: { gridRow: rowsOf(pl, grid, pl.rs, pl.re).span, gridColumn: String(2 + pl.lane) },
+      title: (g.note ? g.note + '\n' : '') + (g.rules.map(function (r) { return Model.ruleText(data, o, r); }).join('\n') || 'Nessuna regola: passano solo i prodotti OK'),
+      draggable: !simMode,
+      ondragstart: function (e) { e.stopPropagation(); startDrag(e, { kind: 'gatenode', id: g.id }); },
+      ondragend: endDrag,
+      onclick: function () { select('gate', g.id); }
+    },
+      h('div', { class: 'gate-title' }, '⛩ GATE'),
+      h('div', { class: 'gate-chips' }, chips.length ? chips : h('span', { class: 'gb muted' }, 'solo OK')),
+      g.dependsOn.length > 1 ? h('div', { class: 'gate-deps' }, 'attende ' + g.dependsOn.map(function (d) { return Model.nodeName(data, o, d); }).join(' + ')) : null,
+      v ? h('div', { class: 'verdict v-' + String(v.verdict).toLowerCase(), title: v.text }, VERDICT_LABEL[v.verdict] || v.verdict) : null)];
+  }
+
   const OUT_LABEL = { OK: 'OK', KO: 'KO', KO_TASK: 'KO + task', PENDING: 'In attesa' };
   const EFF_LABEL = { SKIPPED: 'non eseguito (dip. KO)', SKIPPED_BY_CONDITION: 'saltato (condizione)', WAITING: 'attende dipendenza', NOT_ACTIVE: 'escluso prima', KO_IGNORED: 'KO ignorato' };
 
   function simControls(o, b, t, inOffer) {
-    const ss = simStep(b.stepId);
-    const res = ss && ss.blockResults[b.id] || {};
+    const entry = lastSim && lastSim.blocks[b.id];
+    const res = entry && entry.results || {};
     return h('div', { class: 'sim-ctrl' }, inOffer.map(function (pid) {
       const chosen = ((simOutcomes[o.id] || {})[b.id] || {})[pid] || 'OK';
       const opts = ['OK'];
@@ -545,7 +545,7 @@
       if (t && t.outcomes.indexOf('KO_TASK') >= 0 && b.config.koTask.enabled) opts.push('KO_TASK');
       opts.push('PENDING');
       const eff = res[pid];
-      const reached = !!ss && !ss.skipped && ss.entering.indexOf(pid) >= 0;
+      const reached = !!entry && !entry.skipped && entry.reached.indexOf(pid) >= 0;
       return h('div', { class: 'sim-row' + (reached ? '' : ' unreached') },
         h('span', { class: 'sim-p' }, pname(pid)),
         h('select', { class: 'sim-sel o-' + chosen.toLowerCase(), value: chosen, onchange: function (e) { setOutcome(o.id, b.id, pid, e.target.value); } },
@@ -557,8 +557,8 @@
   /* ---------- drag & drop ---------- */
   function startDrag(e, payload) {
     dragPayload = payload;
-    e.dataTransfer.effectAllowed = payload.kind === 'task' ? 'copy' : 'move';
-    e.dataTransfer.setData('text/plain', payload.id);
+    e.dataTransfer.effectAllowed = payload.kind === 'task' || payload.kind === 'gate' ? 'copy' : 'move';
+    e.dataTransfer.setData('text/plain', payload.id || payload.kind);
     setTimeout(function () { $('board').classList.add('dragging'); }, 0);
   }
   function endDrag() {
@@ -569,94 +569,109 @@
   function allowDrop(e) {
     if (!dragPayload || simMode) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = dragPayload.kind === 'task' ? 'copy' : 'move';
+    e.dataTransfer.dropEffect = dragPayload.kind === 'task' || dragPayload.kind === 'gate' ? 'copy' : 'move';
     e.currentTarget.classList.add('drop-over');
   }
   function leaveDrop(e) { e.currentTarget.classList.remove('drop-over'); }
 
-  function dropOnCell(e, stepId, pid) {
-    e.preventDefault();
-    const p = dragPayload; endDrag();
-    if (!p) return;
-    const o = offer();
-    if (p.kind === 'block') return moveBlock(p.id, stepId, pid);
-    const t = Model.task(data, p.id);
-    if (t.compatibleProducts.indexOf(pid) < 0) return toast(t.name + ' non è compatibile con ' + pname(pid), 'error');
-    const existing = !e.altKey && Model.blocksInStep(o, stepId).find(function (b) { return b.taskId === t.id; });
-    if (existing) {
-      if (existing.products.indexOf(pid) >= 0) return toast(pname(pid) + ' è già nel blocco ' + t.name, 'warn');
-      existing.products.push(pid);
-      sortProducts(o, existing);
-      toast(pname(pid) + ' aggiunto al blocco condiviso ' + t.name, 'ok');
-      selection = { type: 'block', id: existing.id };
-      return commit('all');
-    }
-    addBlock(t, stepId, [pid]);
+  /* Nodi della riga di un prodotto nella colonna più vicina a sinistra di `col`: da questi parte ciò che si rilascia. */
+  function anchorsFor(o, pid, col) {
+    const covers = Model.layout(o).placements.filter(function (p) {
+      if (p.lane >= col) return false;
+      return p.products.indexOf(pid) >= 0;
+    });
+    if (!covers.length) return [];
+    const best = Math.max.apply(null, covers.map(function (p) { return p.lane; }));
+    return covers.filter(function (p) { return p.lane === best; }).map(function (p) { return p.id; });
   }
 
-  function dropOnStep(e, stepId) {
+  function dropOnCell(e, pid, col) {
     e.preventDefault();
     const p = dragPayload; endDrag();
     if (!p) return;
-    if (p.kind === 'block') return moveBlock(p.id, stepId);
     const o = offer();
+    const anchors = anchorsFor(o, pid, col);
+    if (p.kind === 'gate') return addGateAfter(anchors);
+    if (p.kind === 'gatenode') return reparent(p.id, anchors, 'Gate spostato');
+    if (p.kind === 'block') return moveBlock(p.id, pid, anchors);
     const t = Model.task(data, p.id);
-    const prods = o.products.filter(function (pid) { return t.compatibleProducts.indexOf(pid) >= 0; });
-    if (!prods.length) return toast(t.name + ' non è compatibile con nessun prodotto dell\'offerta', 'error');
-    addBlock(t, stepId, prods);
+    if (t.compatibleProducts.indexOf(pid) < 0) return toast(t.name + ' non è compatibile con ' + pname(pid), 'error');
+    // stesso task già in questa colonna su un altro prodotto: il prodotto si aggiunge al blocco (una chiamata per N prodotti); Alt = blocco separato
+    const same = !e.altKey && Model.layout(o).placements.find(function (pl) { return pl.kind === 'block' && pl.lane === col && pl.block.taskId === t.id && pl.block.products.indexOf(pid) < 0; });
+    if (same) {
+      same.block.products.push(pid);
+      sortProducts(o, same.block);
+      toast(pname(pid) + ' aggiunto al blocco condiviso ' + t.name, 'ok');
+      selection = { type: 'block', id: same.block.id };
+      return commit('all');
+    }
+    addBlock(t, [pid], anchors);
   }
 
   /* ---------------- azioni ---------------- */
   function sortProducts(o, b) { b.products.sort(function (a, c) { return o.products.indexOf(a) - o.products.indexOf(c); }); }
+  function allIds(o) { return Model.nodes(o).map(function (n) { return n.id; }); }
 
-  function addBlock(t, stepId, products) {
+  function addBlock(t, products, dependsOn) {
     const o = offer();
-    if (t.allowedSteps.length && t.allowedSteps.indexOf(stepId) < 0)
-      toast(t.name + ' non è previsto in ' + Model.step(data, stepId).name + ' (vedi catalogo)', 'warn');
-    const b = { id: Util.uniqueId('B_' + t.id, o.blocks.map(function (x) { return x.id; })), taskId: t.id, stepId: stepId, products: products.slice(), dependsOn: [], config: Model.defaultBlockConfig(t) };
+    const b = { id: Util.uniqueId('B_' + t.id, allIds(o)), taskId: t.id, products: products.slice(), dependsOn: (dependsOn || []).slice(), config: Model.defaultBlockConfig(t) };
     sortProducts(o, b);
     o.blocks.push(b);
     selection = { type: 'block', id: b.id };
     commit('all');
   }
 
-  function detachBlockRefs(o, id) {
-    o.blocks.forEach(function (x) { x.dependsOn = x.dependsOn.filter(function (d) { return d !== id; }); });
-    let removed = 0;
-    o.gates.forEach(function (g) {
-      const before = g.rules.length;
-      g.rules = g.rules.filter(function (r) { return !(r.type === 'DONT_WAIT' && r.blockId === id); });
-      removed += before - g.rules.length;
+  /* Toglie un nodo e ricollega chi ne dipendeva ai suoi genitori; ripulisce le regole che lo citano. */
+  function removeNode(id) {
+    const o = offer();
+    const n = Model.node(o, id);
+    if (!n) return;
+    const deps = (n.dependsOn || []).slice();
+    Model.nodes(o).forEach(function (x) {
+      if (x.id === id || (x.ref.dependsOn || []).indexOf(id) < 0) return;
+      const next = x.ref.dependsOn.filter(function (d) { return d !== id; });
+      deps.forEach(function (d) { if (next.indexOf(d) < 0) next.push(d); });
+      x.ref.dependsOn = next;
     });
-    return removed;
+    o.gates.forEach(function (g) {
+      g.rules = g.rules.filter(function (r) { return !(r.type === 'DONT_WAIT' && r.blockId === id); });
+      g.rules.forEach(function (r) { if (r.type === 'ROUTE' && r.to === id) r.to = ''; });
+    });
+    o.blocks = o.blocks.filter(function (b) { return b.id !== id; });
+    o.gates = o.gates.filter(function (g) { return g.id !== id; });
+    if (simOutcomes[o.id]) delete simOutcomes[o.id][id];
   }
 
-  function moveBlock(id, stepId, pid) {
+  /* Cambia da chi dipende un nodo (senza creare cicli). */
+  function reparent(id, anchors, msg) {
     const o = offer();
-    const b = o.blocks.find(function (x) { return x.id === id; });
+    const n = Model.node(o, id);
+    if (!n) return;
+    const deps = anchors.filter(function (a) { return a !== id && Model.canDepend(o, id, a); });
+    n.dependsOn = deps;
+    selection = { type: Model.isGate(o, id) ? 'gate' : 'block', id: id };
+    toast((msg || 'Spostato') + (deps.length ? ': dopo ' + deps.map(function (d) { return Model.nodeName(data, o, d); }).join(' + ') : ': ora parte all\'inizio'), 'ok');
+    commit('all');
+  }
+
+  function moveBlock(id, pid, anchors) {
+    const o = offer();
+    const b = Model.block(o, id);
     if (!b) return;
-    if (b.stepId === stepId) {
-      const t = Model.task(data, b.taskId);
-      if (pid && b.products.indexOf(pid) < 0 && t && t.compatibleProducts.indexOf(pid) >= 0) {
+    const t = Model.task(data, b.taskId);
+    if (b.products.indexOf(pid) < 0) {
+      if (t && t.compatibleProducts.indexOf(pid) >= 0) {
         b.products.push(pid); sortProducts(o, b);
         toast(pname(pid) + ' aggiunto al blocco', 'ok');
         return commit('all');
       }
-      return;
+      return toast((t ? t.name : b.taskId) + ' non è compatibile con ' + pname(pid), 'error');
     }
-    b.stepId = stepId;
-    b.dependsOn = [];
-    const removed = detachBlockRefs(o, id);
-    selection = { type: 'block', id: id };
-    toast('Blocco spostato in ' + Model.step(data, stepId).name + (removed ? ' (rimosse ' + removed + ' regole "Non attendere" collegate)' : ''), 'ok');
-    commit('all');
+    reparent(id, anchors, 'Blocco spostato');
   }
 
   function removeBlock(id) {
-    const o = offer();
-    o.blocks = o.blocks.filter(function (b) { return b.id !== id; });
-    detachBlockRefs(o, id);
-    if (simOutcomes[o.id]) delete simOutcomes[o.id][id];
+    removeNode(id);
     selection = null;
     commit('all');
   }
@@ -664,35 +679,33 @@
   function duplicateBlock(b) {
     const o = offer();
     const nb = Util.clone(b);
-    nb.id = Util.uniqueId(b.id, o.blocks.map(function (x) { return x.id; }));
-    nb.dependsOn = [];
+    nb.id = Util.uniqueId(b.id, allIds(o));
     o.blocks.push(nb);
     selection = { type: 'block', id: nb.id };
     commit('all');
   }
 
-  function addGate(stepId) {
+  /*
+   * Aggiunge un gate dopo i nodi indicati. Con un solo nodo il gate si inserisce nel percorso: chi dipendeva da quel nodo
+   * ora dipende dal gate. Con più nodi nasce un join; senza nodi un gate scollegato (da collegare dal pannello).
+   */
+  function addGateAfter(anchors) {
     const o = offer();
-    const g = { id: Util.uid('G'), afterStep: stepId, note: '', rules: [] };
+    const g = { id: Util.uniqueId('G', allIds(o)), dependsOn: (anchors || []).slice(), note: '', rules: [] };
+    if (g.dependsOn.length === 1) {
+      const a = g.dependsOn[0];
+      Model.nodes(o).forEach(function (x) {
+        if (x.ref.dependsOn.indexOf(a) >= 0) x.ref.dependsOn = x.ref.dependsOn.map(function (d) { return d === a ? g.id : d; });
+      });
+    }
     o.gates.push(g);
     selection = { type: 'gate', id: g.id };
     commit('all');
   }
 
   function removeGate(id) {
-    const o = offer();
-    o.gates = o.gates.filter(function (g) { return g.id !== id; });
+    removeNode(id);
     selection = null;
-    commit('all');
-  }
-
-  function moveGate(g, dir) {
-    const o = offer();
-    const sib = Model.gatesAfter(o, g.afterStep);
-    const other = sib[sib.indexOf(g) + dir];
-    if (!other) return;
-    const i = o.gates.indexOf(g), j = o.gates.indexOf(other);
-    o.gates[i] = other; o.gates[j] = g;
     commit('all');
   }
 
@@ -703,7 +716,7 @@
     if (affected.length && !confirm('Rimuovere ' + pname(pid) + ' dall\'offerta?\n' + affected.length + ' blocchi lo usano' + (orphan.length ? ', ' + orphan.length + ' resteranno vuoti e saranno eliminati.' : '.'))) return;
     o.products = o.products.filter(function (p) { return p !== pid; });
     affected.forEach(function (b) { b.products = b.products.filter(function (p) { return p !== pid; }); });
-    orphan.forEach(function (b) { o.blocks = o.blocks.filter(function (x) { return x !== b; }); detachBlockRefs(o, b.id); });
+    orphan.forEach(function (b) { removeNode(b.id); });
     o.gates.forEach(function (g) { g.rules.forEach(function (r) { if (r.products) r.products = r.products.filter(function (p) { return p !== pid; }); }); });
     if (selection && selection.type === 'block' && !o.blocks.some(function (b) { return b.id === selection.id; })) selection = null;
     commit('all');
@@ -822,17 +835,18 @@
         field('Descrizione', h('textarea', { rows: 2, value: o.description || '', onchange: function (e) { o.description = e.target.value; Store.save(data); } }))),
       section('Riepilogo',
         h('div', { class: 'kpis' },
-          kpi(o.products.length, 'prodotti'), kpi(o.blocks.length, 'blocchi'), kpi(o.gates.length, 'barre regole'),
+          kpi(o.products.length, 'prodotti'), kpi(o.blocks.length, 'blocchi'), kpi(o.gates.length, 'gate'),
           kpi(new Set(o.blocks.map(function (b) { return b.taskId; })).size, 'servizi'))),
       section('Validazione',
         v.ok && !v.warnings.length ? h('div', { class: 'msg ok' }, '✔ Nessun problema rilevato') : null,
         v.errors.map(item('error', '✖')), v.warnings.map(item('warning', '⚠')), v.infos.map(item('info', 'ℹ'))),
       section('Come si usa',
         h('ul', { class: 'help' },
-          h('li', null, 'Righe = prodotti dell\'offerta, colonne = step fissi del processo.'),
-          h('li', null, 'Trascina i task dalla palette: un blocco può coprire più prodotti (task common).'),
-          h('li', null, 'Blocchi nello stesso step senza dipendenze sono paralleli; usa "Esegui dopo" per metterli in sequenza.'),
-          h('li', null, 'Le barre arancioni tra gli step contengono le regole di passaggio: clicca per configurarle.'),
+          h('li', null, 'Righe = prodotti dell\'offerta, colonne = ordine di esecuzione (calcolato dalle dipendenze, senza step fissi).'),
+          h('li', null, 'Trascina i task dalla palette su una riga: partono dopo il nodo che li precede su quella riga; un blocco può coprire più prodotti.'),
+          h('li', null, 'Nodi senza dipendenze, o con lo stesso genitore, sono paralleli (rami); "Dopo" nel pannello li mette in sequenza o li riunisce (join).'),
+          h('li', null, 'I gate arancioni sono mattoncini come gli altri: uno solo per un ramo oppure un join dei rami; contengono le regole (solo OK, stop, ritorno/salto, non attendere).'),
+          h('li', null, 'Il DSL esprime solo sequenze e rami paralleli: rami che si incrociano vanno riuniti con un gate.'),
           h('li', null, '"▶ Simulazione" per provare gli esiti, "⚙ Execution Plan" per generare l\'output per i team backend.'))));
   }
 
@@ -912,7 +926,7 @@
   }
 
   /* Editor di una condizione `holder[key]`: righe riferimento / operatore / valore, unite da E oppure OPPURE.
-   * ctx = { block } per un blocco, { stepId } per un gate: decide quali riferimenti sono disponibili. */
+   * ctx = { block } per un blocco, { gate: id } per un gate: decide quali riferimenti sono disponibili. */
   function conditionEditor(o, holder, key, ctx, required) {
     const when = holder[key];
     const refs = Conditions.references(data, o, ctx);
@@ -984,7 +998,6 @@
   function blockPanel(o, b) {
     const t = Model.task(data, b.taskId) || { name: b.taskId, description: 'Task non presente nel catalogo', inputs: [], outputs: [], outcomes: ['OK', 'KO'], compatibleProducts: [], type: 'sync', scope: 'common', api: {} };
     const c = b.config;
-    const others = Model.blocksInStep(o, b.stepId).filter(function (x) { return x.id !== b.id; });
     const num = function (obj, key) {
       return h('input', { type: 'number', min: 0, value: obj[key], onchange: function (e) { obj[key] = Math.max(0, Number(e.target.value) || 0); commit('board'); } });
     };
@@ -993,11 +1006,10 @@
     };
     return h('div', null,
       h('div', { class: 'panel-head block-head' },
-        h('div', { class: 'panel-kicker' }, 'Blocco · ' + Model.step(data, b.stepId).name),
+        h('div', { class: 'panel-kicker' }, 'Blocco ' + b.id),
         h('h3', null, t.name),
         h('div', { class: 'muted' }, t.description || ''),
         h('div', { class: 'pi-meta' },
-          h('span', { class: 'badge ' + t.scope }, t.scope === 'common' ? 'common' : 'verticale'),
           h('span', { class: 'badge ' + t.type }, t.type),
           t.api && t.api.path ? h('code', { class: 'api' }, t.api.method + ' ' + t.api.path) : null)),
       issuesFor('block', b.id),
@@ -1013,12 +1025,7 @@
           h('option', { value: 'perOffer' }, '1 chiamata per N prodotti'),
           h('option', { value: 'perProduct' }, '1 chiamata per prodotto')),
           'Es. Oracolo: una sola chiamata per Conto, Evo e Lib Min.'),
-        field('Esegui dopo (stesso step)', others.length ? h('div', null, others.map(function (x) {
-          return h('label', { class: 'check' },
-            h('input', { type: 'checkbox', checked: b.dependsOn.indexOf(x.id) >= 0, onchange: function (e) { toggleIn(b.dependsOn, x.id, e.target.checked); commit('all'); } }),
-            Model.blockLabel(data, o, x.id));
-        })) : h('div', { class: 'muted' }, 'Nessun altro blocco nello step.'),
-          'Senza dipendenze i blocchi dello step girano in parallelo.'),
+        dependsEditor(o, b, 'Senza collegamenti il blocco parte subito, in parallelo agli altri. Con più nodi aspetta tutti (join).'),
         h('div', { class: 'row2' }, field('Retry (tentativi)', num(c.retry, 'count')), field('Intervallo retry (s)', num(c.retry, 'intervalSec')))),
       whenSection(o, b),
       mappingSection(o, b, t),
@@ -1048,24 +1055,26 @@
       h('div', { class: 'panel-actions' },
         h('button', { onclick: function () { select(null); } }, '← Offerta'),
         h('button', { onclick: function () { duplicateBlock(b); } }, '⧉ Duplica'),
+        h('button', { title: 'Inserisce un gate subito dopo questo blocco', onclick: function () { addGateAfter([b.id]); } }, '⛩ Gate dopo'),
         h('button', { class: 'danger', onclick: function () { removeBlock(b.id); } }, '🗑 Elimina')));
   }
 
-  function newRule(type, gate) {
+  function newRule(type) {
     if (type === 'DONT_WAIT') return { type: type, blockId: '' };
     if (type === 'STOP_ON_KO') return { type: type, products: [] };
-    if (type === 'ROUTE') return { type: type, when: Conditions.emptyWhen(), to: gate ? gate.afterStep : '', maxIterations: Model.MAX_ITERATIONS_DEFAULT, onExceed: 'STOP' };
+    if (type === 'ROUTE') return { type: type, when: Conditions.emptyWhen(), to: '', maxIterations: Model.MAX_ITERATIONS_DEFAULT, onExceed: 'STOP' };
     return { type: type };
   }
 
   /* Destinazione e limiti di un instradamento (la condizione è nell'editor condiviso). */
-  function routeEditor(o, g, r) {
-    const si = Model.stepIndex(data, g.afterStep);
-    const dest = Model.stepIndex(data, r.to);
-    const back = r.to !== 'STOP' && dest >= 0 && dest <= si;
+  function routeEditor(o, g, r, st) {
+    const gi = st.top.indexOf(g.id);
+    const dest = st.top.indexOf(r.to);
+    const back = r.to !== 'STOP' && dest >= 0 && gi >= 0 && dest <= gi;
+    const targets = gi >= 0 ? st.top : [];
     return h('div', { class: 'route' },
       h('div', { class: 'field-label' }, 'Se'),
-      conditionEditor(o, r, 'when', { stepId: g.afterStep }, true),
+      conditionEditor(o, r, 'when', { gate: g.id }, true),
       field('Allora',
         h('select', { value: r.to || '', onchange: function (e) {
           r.to = e.target.value;
@@ -1074,58 +1083,68 @@
           commit('all');
         } },
           h('option', { value: '' }, '— destinazione —'),
-          data.steps.map(function (s, i) { return h('option', { value: s.id }, (i <= si ? '↩ torna a ' : '⤳ salta a ') + s.name + (i === si ? ' (ripeti questo step)' : '')); }),
+          targets.map(function (id, i) { return h('option', { value: id }, (i <= gi ? '↩ torna a ' : '⤳ salta a ') + Model.nodeName(data, o, id) + ' [' + id + ']' + (id === g.id ? ' (solo il gate)' : '')); }),
+          r.to && r.to !== 'STOP' && dest < 0 ? h('option', { value: r.to }, '⚠ ' + r.to + ' (non raggiungibile)') : null,
           h('option', { value: 'STOP' }, '⛔ ferma l\'offerta')),
-        back ? 'Il ritorno riesegue lo step di destinazione (e quelli successivi) per i prodotti ancora in corsa, KO compresi. Si valuta prima delle altre regole del gate.'
-          : r.to === 'STOP' ? 'L\'offerta si ferma con errore.' : 'Salta gli step intermedi per i prodotti che superano il gate (dopo le regole sui KO).'),
+        gi < 0 ? 'Questo gate è dentro rami paralleli: qui si può solo fermare l\'offerta. Ritorno e salto valgono per i gate della sequenza principale (nel DSL un salto non esce da un ramo).'
+          : back ? 'Il ritorno riesegue i nodi dalla destinazione a questo gate (rami compresi) per i prodotti ancora in corsa, KO compresi. Si valuta prima delle altre regole del gate.'
+          : r.to === 'STOP' ? 'L\'offerta si ferma con errore.' : 'Salta i nodi intermedi per i prodotti che superano il gate (dopo le regole sui KO). Destinazioni: blocchi e gate della sequenza principale.'),
       back ? h('div', { class: 'row2' },
         field('Massimo ritorni (1-' + Model.MAX_ITERATIONS_LIMIT + ')', h('input', { type: 'number', min: 1, max: Model.MAX_ITERATIONS_LIMIT, value: r.maxIterations, onchange: function (e) { r.maxIterations = Math.floor(Number(e.target.value)) || 0; commit('all'); } })),
         field('Oltre il massimo', h('select', { value: r.onExceed || 'STOP', onchange: function (e) { r.onExceed = e.target.value; commit('all'); } },
           h('option', { value: 'STOP' }, 'ferma l\'offerta'), h('option', { value: 'CONTINUE' }, 'prosegui con le altre regole')))) : null);
   }
 
+  /* Checklist dei nodi da cui dipende `n` ("Dopo"): esclude i discendenti, che creerebbero un ciclo. */
+  function dependsEditor(o, n, hint) {
+    const others = Model.nodes(o).filter(function (x) { return x.id !== n.id && Model.canDepend(o, n.id, x.id); });
+    return field('Dopo (esegui dopo…)', others.length ? h('div', null, others.map(function (x) {
+      return h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: n.dependsOn.indexOf(x.id) >= 0, onchange: function (e) { toggleIn(n.dependsOn, x.id, e.target.checked); commit('all'); } }),
+        (x.kind === 'gate' ? '⛩ ' : '') + Model.blockLabel(data, o, x.id) + (x.kind === 'block' ? ' [' + x.id + ']' : ''));
+    })) : h('div', { class: 'muted' }, 'Nessun altro nodo collegabile.'), hint);
+  }
+
   function gatePanel(o, g) {
-    const si = Model.stepIndex(data, g.afterStep);
-    const s = data.steps[si], nx = data.steps[si + 1];
-    const siblings = Model.gatesAfter(o, g.afterStep);
-    const idx = siblings.indexOf(g);
-    const stepBlocks = Model.blocksInStep(o, g.afterStep);
-    const pol = Model.effectivePolicy(siblings);
+    const pol = Model.effectivePolicy([g]);
+    const st = Model.structure(o);
+    const depBlocks = g.dependsOn.filter(function (id) { return !!Model.block(o, id); });
+    const scope = Model.scopeProducts(o, g.id);
     return h('div', null,
       h('div', { class: 'panel-head gate-panel-head' },
-        h('div', { class: 'panel-kicker' }, 'Barra regole ' + (idx + 1) + ' di ' + siblings.length),
-        h('h3', null, s.name + ' → ' + nx.name),
-        h('div', { class: 'muted' }, 'Le regole di tutte le barre tra questi due step vengono valutate insieme, nell\'ordine.')),
+        h('div', { class: 'panel-kicker' }, g.dependsOn.length > 1 ? 'Gate · attende ' + g.dependsOn.length + ' nodi' : 'Gate · attende 1 nodo'),
+        h('h3', null, 'Gate ' + g.id),
+        h('div', { class: 'muted' }, 'Si valuta quando tutti i nodi collegati hanno finito' + (scope.length ? ' · governa: ' + scope.map(pname).join(', ') : '') + '. Con più nodi "Dopo" riunisce i rami (join); con uno solo vale per quel ramo.')),
       issuesFor('gate', g.id),
+      section('Collegamenti', dependsEditor(o, g, 'Un gate con un solo nodo vale solo per quel ramo; con più nodi aspetta tutti (join).')),
       section('Regole',
         g.rules.length ? g.rules.map(function (r, ri) {
           return h('div', { class: 'rule' },
             h('div', { class: 'rule-head' },
-              h('select', { value: r.type, onchange: function (e) { g.rules[ri] = newRule(e.target.value, g); commit('all'); } },
+              h('select', { value: r.type, onchange: function (e) { g.rules[ri] = newRule(e.target.value); commit('all'); } },
                 Object.keys(RT).map(function (k) { return h('option', { value: k }, RT[k].label); })),
               h('button', { class: 'icon danger', title: 'Rimuovi regola', onclick: function () { g.rules.splice(ri, 1); commit('all'); } }, '✕')),
             h('div', { class: 'field-hint' }, RT[r.type] ? RT[r.type].desc : ''),
-            r.type === 'DONT_WAIT' ? field('Blocco da non attendere', h('select', { value: r.blockId || '', onchange: function (e) { r.blockId = e.target.value; commit('all'); } },
+            r.type === 'DONT_WAIT' ? field('Blocco da non attendere (uno dei collegati)', h('select', { value: r.blockId || '', onchange: function (e) { r.blockId = e.target.value; commit('all'); } },
               h('option', { value: '' }, '— seleziona —'),
-              stepBlocks.map(function (b) { return h('option', { value: b.id }, Model.blockLabel(data, o, b.id)); }))) : null,
+              depBlocks.map(function (id) { return h('option', { value: id }, Model.blockLabel(data, o, id)); }))) : null,
             r.type === 'STOP_ON_KO' ? field('Solo se KO su (nessuno = qualsiasi prodotto)', h('div', null, o.products.map(function (pid) {
               return h('label', { class: 'check inline' },
                 h('input', { type: 'checkbox', checked: (r.products || []).indexOf(pid) >= 0, onchange: function (e) { r.products = r.products || []; toggleIn(r.products, pid, e.target.checked); commit('all'); } }),
                 pname(pid));
             }))) : null,
-            r.type === 'ROUTE' ? routeEditor(o, g, r) : null);
-        }) : h('div', { class: 'muted' }, 'Nessuna regola in questa barra.'),
+            r.type === 'ROUTE' ? routeEditor(o, g, r, st) : null);
+        }) : h('div', { class: 'muted' }, 'Nessuna regola: passano solo i prodotti OK (default).'),
         h('div', { class: 'add-rule' }, Object.keys(RT).map(function (k) {
-          return h('button', { class: 'small', onclick: function () { g.rules.push(newRule(k, g)); commit('all'); } }, '+ ' + RT[k].label);
+          return h('button', { class: 'small', onclick: function () { g.rules.push(newRule(k)); commit('all'); } }, '+ ' + RT[k].label);
         }))),
       section('Nota', h('textarea', { rows: 2, value: g.note || '', placeholder: 'Motivazione / riferimento requisito', onchange: function (e) { g.note = e.target.value; Store.save(data); } })),
-      section('Comportamento effettivo della transizione',
-        h('ul', { class: 'help' }, ExecutionPlan.describePolicy(data, o, pol, g.afterStep).map(function (d) { return h('li', null, d); }))),
+      section('Comportamento effettivo',
+        h('ul', { class: 'help' }, ExecutionPlan.describePolicy(data, o, pol, g).map(function (d) { return h('li', null, d); }))),
       h('div', { class: 'panel-actions' },
         h('button', { onclick: function () { select(null); } }, '← Offerta'),
-        idx > 0 ? h('button', { onclick: function () { moveGate(g, -1); } }, '◀ Prima') : null,
-        idx < siblings.length - 1 ? h('button', { onclick: function () { moveGate(g, 1); } }, 'Dopo ▶') : null,
-        h('button', { class: 'danger', onclick: function () { removeGate(g.id); } }, '🗑 Elimina barra')));
+        h('button', { title: 'Inserisce un altro gate subito dopo questo', onclick: function () { addGateAfter([g.id]); } }, '＋ Gate dopo'),
+        h('button', { class: 'danger', onclick: function () { removeGate(g.id); } }, '🗑 Elimina gate')));
   }
 
   /* ---------------- simulazione: log ---------------- */
@@ -1181,18 +1200,20 @@
     const o = offer();
     if (!o) return;
     const plan = ExecutionPlan.build(data, o);
-    const files = dslFiles(o);
+    let files = [], dslError = null;
+    try { files = dslFiles(o); } catch (err) { dslError = err.message; }
     const dslEl = h('div', { class: 'plan-dsl' },
       h('div', { class: 'dsl-toolbar' },
         h('span', { class: 'muted' }, 'DSL Serverless Workflow 1.0 generato dalla dashboard (sola lettura). Per cambiarlo modifica l\'offerta.'),
         h('div', { class: 'spacer' }),
-        h('button', { class: 'small', onclick: function () { copyText(files[fileIdx].content); } }, '⧉ Copia')),
+        h('button', { class: 'small', disabled: !files.length, onclick: function () { copyText(files[fileIdx].content); } }, '⧉ Copia')),
       h('div', { class: 'engine-files' }),
       h('pre', { class: 'json plan-dsl-pre' }));
     let fileIdx = 0;
     const drawDsl = function () {
       const bar = dslEl.querySelector('.engine-files');
       bar.innerHTML = '';
+      if (dslError) { dslEl.querySelector('pre').textContent = 'DSL non generato: ' + dslError; return; }
       files.forEach(function (f, i) { bar.append(h('button', { class: 'tab' + (i === fileIdx ? ' active' : ''), onclick: function () { fileIdx = i; drawDsl(); } }, f.name + (i ? ' (sotto-workflow)' : ''))); });
       dslEl.querySelector('pre').textContent = files[fileIdx].content;
     };
@@ -1208,7 +1229,7 @@
     });
     views.forEach(function (v, i) { if (i) v.el.classList.add('hidden'); });
     Util.modal('Execution Plan — ' + o.name, [h('div', { class: 'tabs-inline' }, tabs)].concat(views.map(function (v) { return v.el; })), [
-      { label: '⭳ Esporta DSL (' + files.length + (files.length > 1 ? ' file' : ' file') + ')', class: 'primary', onClick: function () { files.forEach(function (f, i) { setTimeout(function () { Store.downloadText(f.content, f.name, f.mime); }, i * 300); }); } },
+      { label: '⭳ Esporta DSL (' + files.length + ' file)', class: 'primary', onClick: function () { if (!files.length) return toast(dslError || 'Nessun DSL da esportare', 'error'); files.forEach(function (f, i) { setTimeout(function () { Store.downloadText(f.content, f.name, f.mime); }, i * 300); }); } },
       { label: '🖨 Stampa', onClick: function () { window.print(); } }
     ]);
     if (!plan.summary.valid) toast('Il piano contiene errori di validazione', 'warn');
@@ -1278,6 +1299,47 @@
     el.append(g);
   }
 
+  /*
+   * Scheda Diagramma DSL: il viewer ufficiale Open Workflow (js/vendor/open-workflow-editor, bundle classico) disegna il DSL generato.
+   * Sta in un iframe: il suo CSS contiene un reset globale che altrimenti cambierebbe l'aspetto della dashboard.
+   * I percorsi dello srcdoc si risolvono rispetto alla pagina, quindi funziona anche aprendo index.html da file://.
+   */
+  const VIEWER_DIR = 'js/vendor/open-workflow-editor/';
+  function viewerDoc() {
+    return '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="' + VIEWER_DIR + 'diagram-editor.css">' +
+      '<style>html,body,#v{height:100%;margin:0}</style></head><body><div id="v"></div>' +
+      '<script src="' + VIEWER_DIR + 'diagram-editor.iife.js"><\/script></body></html>';
+  }
+
+  function renderDiagramView() {
+    const el = $('diagramview'); el.innerHTML = '';
+    const o = offer();
+    if (!o) { el.append(h('div', { class: 'empty' }, 'Nessuna offerta selezionata.')); return; }
+    let files = [];
+    try { files = dslFiles(o); } catch (err) {
+      el.append(h('div', { class: 'diagram-msg' }, 'Il DSL non si può generare: ' + err.message + ' (vedi la vista Visuale).'));
+      return;
+    }
+    if (diagramFile >= files.length) diagramFile = 0;
+    const frame = h('iframe', { class: 'diagram-frame', title: 'Diagramma del DSL' });
+    const show = function () {
+      const w = frame.contentWindow;
+      if (!w || !w.OpenWorkflowViewer) { frame.replaceWith(h('div', { class: 'diagram-msg' }, 'Viewer non disponibile: manca js/vendor/open-workflow-editor (vedi tools/open-workflow-viewer).')); return; }
+      w.OpenWorkflowViewer.mount(w.document.getElementById('v'), { content: files[diagramFile].content, locale: 'en', colorMode: ui.diagramTheme });
+    };
+    frame.addEventListener('load', show);
+    frame.srcdoc = viewerDoc();
+    el.append(
+      h('div', { class: 'dsl-toolbar' },
+        h('b', null, 'Diagramma del DSL'),
+        h('span', { class: 'muted' }, 'Viewer ufficiale Open Workflow, sola lettura: ogni modifica all\'offerta rigenera il DSL. Zoom con la rotella o i pulsanti (il riquadro ⛶ mostra tutto), trascina per spostarti.'),
+        h('div', { class: 'spacer' }),
+        h('label', { class: 'muted diagram-theme' }, 'Tema ', h('select', { value: ui.diagramTheme, onchange: function (e) { ui.diagramTheme = e.target.value; saveUi(); renderDiagramView(); } },
+          h('option', { value: 'light' }, 'Chiaro'), h('option', { value: 'dark' }, 'Scuro'), h('option', { value: 'system' }, 'Come il sistema'))),
+        files.length > 1 ? h('select', { value: String(diagramFile), onchange: function (e) { diagramFile = Number(e.target.value); renderDiagramView(); } },
+          files.map(function (f, i) { return h('option', { value: String(i) }, f.name + (i ? ' (sotto-workflow)' : '')); })) : null),
+      frame);
+  }
   /* ---------------- bootstrap ---------------- */
   const requested = new URLSearchParams(location.search).get('offer');
   if (requested && data.offers.some(function (x) { return x.id === requested; })) offerId = requested;

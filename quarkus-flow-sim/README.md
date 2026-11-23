@@ -4,6 +4,8 @@ Verifica se il workflow Open Workflow (Serverless Workflow 1.0) generato dalla d
 
 Tutti i servizi chiamati sono simulati da questa stessa applicazione: non serve nessun endpoint esterno.
 
+> **Attenzione:** i flussi in `src/main/resources/flow/`, i piani e gli scenari sono stati generati con il modello a **step** della dashboard e provati in quella forma. La dashboard ora produce un DSL a grafo (gate come task nel ramo, `dead`, fork annidati, blocchi `<id>-run`/`<id>-settle`) che **non è stato eseguito** su Quarkus Flow: `tools/generate.js` non è stato adeguato né rieseguito e va aggiornato prima di rigenerare i flussi.
+
 ## Cosa contiene
 | Percorso | Scopo |
 |---|---|

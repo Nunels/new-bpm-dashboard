@@ -89,6 +89,9 @@
           <include>js/**</include>
           <include>schema/**</include>
         </includes>
+        <excludes>
+          <exclude>js/vendor/open-workflow-editor/**</exclude>
+        </excludes>
       </resource>
       <!-- la dashboard servita dallo stesso backend: stessa origine, nessun problema di CORS né di localStorage separati -->
       <resource>

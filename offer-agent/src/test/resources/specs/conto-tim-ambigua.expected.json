@@ -5,13 +5,13 @@
     "description": "Conto venduto insieme all'offerta TIM",
     "products": ["CONTO", "TIM"],
     "blocks": [
-      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
-      { "id": "B_ORACOLO_2", "taskId": "ORACOLO_2", "stepId": "PRELIMINARI", "products": ["TIM"], "dependsOn": [] },
-      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] },
-      { "id": "B_ATTIVAZIONE_TIM", "taskId": "ATTIVAZIONE_TIM", "stepId": "ATTIVAZIONI", "products": ["TIM"], "dependsOn": [] }
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ORACOLO_2", "taskId": "ORACOLO_2", "products": ["TIM"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "products": ["CONTO"], "dependsOn": ["G_PRELIMINARI"] },
+      { "id": "B_ATTIVAZIONE_TIM", "taskId": "ATTIVAZIONE_TIM", "products": ["TIM"], "dependsOn": ["G_PRELIMINARI"] }
     ],
     "gates": [
-      { "id": "G_PRELIMINARI", "afterStep": "PRELIMINARI", "note": "Il partner TIM risponde in ritardo: non vogliamo aspettarlo.", "rules": [{ "type": "DONT_WAIT", "blockId": "B_ORACOLO_2" }] }
+      { "id": "G_PRELIMINARI", "dependsOn": ["B_ORACOLO", "B_ORACOLO_2"], "note": "Il partner TIM risponde in ritardo: non vogliamo aspettarlo.", "rules": [{ "type": "DONT_WAIT", "blockId": "B_ORACOLO_2" }] }
     ]
   },
   "assumptions": [

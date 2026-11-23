@@ -253,22 +253,10 @@
     return offer.blocks.find(function (b) { return b.id === ref; }) || offer.blocks.find(function (b) { return b.taskId === ref; }) || null;
   }
 
-  /* Blocchi già eseguiti quando parte `block`: step precedenti e dipendenze (anche indirette) dello stesso step. */
+  /* Blocchi già eseguiti quando parte `block`: i suoi antenati nel grafo delle dipendenze ("Esegui dopo", anche indirette). */
   function producersFor(data, offer, block) {
-    const idx = function (id) { return data.steps.findIndex(function (s) { return s.id === id; }); };
-    const mine = idx(block.stepId);
-    const deps = {};
-    (function add(b) {
-      (b.dependsOn || []).forEach(function (d) {
-        if (deps[d]) return;
-        deps[d] = true;
-        const x = offer.blocks.find(function (y) { return y.id === d; });
-        if (x) add(x);
-      });
-    })(block);
-    return offer.blocks.filter(function (b) {
-      return b.id !== block.id && (idx(b.stepId) < mine || (idx(b.stepId) === mine && deps[b.id]));
-    });
+    const anc = global.Model.ancestors(offer, block.id);
+    return offer.blocks.filter(function (b) { return b.id !== block.id && anc.indexOf(b.id) >= 0; });
   }
 
   /* Task che produce un blocco (per leggere le dichiarazioni del catalogo, es. lista risultati per prodotto). */
@@ -341,7 +329,7 @@
     if (!producer) return { level: bad, kind: c.kind, msg: 'il blocco "' + c.ref + '" non è nell\'offerta' };
     if (producer.id === block.id) return { level: 'error', kind: c.kind, msg: 'un blocco non può leggere il proprio output' };
     const before = ctx.producers || producersFor(data, offer, block);
-    if (!before.some(function (b) { return b.id === producer.id; })) return { level: bad, kind: c.kind, msg: 'il blocco "' + producer.id + '" non è eseguito prima di questo (serve uno step precedente o la dipendenza "Esegui dopo")' };
+    if (!before.some(function (b) { return b.id === producer.id; })) return { level: bad, kind: c.kind, msg: 'il blocco "' + producer.id + '" non è eseguito prima di questo (serve la dipendenza "Esegui dopo", anche indiretta)' };
     const pt = taskOf(data, producer);
     if (/\[@\]/.test(c.field)) {
       if (!pt || !pt.productResults) return { level: 'error', kind: c.kind, msg: '[@] richiede che il task ' + producer.taskId + ' dichiari la lista risultati per prodotto (catalogo)' };

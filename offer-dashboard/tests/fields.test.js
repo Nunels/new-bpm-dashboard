@@ -51,10 +51,9 @@ test('classify: percorsi nidificati, sistema e valori fissi', function () {
 /* Dati di prova: due blocchi in sequenza (A per prodotto → B), con output annidato. */
 function scenario() {
   const data = clone(Store.load());
-  const step = data.steps[0].id;
   const base = data.tasks[0];
   const mk = function (id, extra) {
-    return Object.assign(clone(base), { id: id, name: id, type: 'sync', scope: 'common', callMode: 'perOffer', compatibleProducts: data.products.map(function (p) { return p.id; }), allowedSteps: [], outcomes: ['OK', 'KO'], inputs: [], outputs: [] }, extra);
+    return Object.assign(clone(base), { id: id, name: id, type: 'sync', callMode: 'perOffer', compatibleProducts: data.products.map(function (p) { return p.id; }), outcomes: ['OK', 'KO'], inputs: [], outputs: [] }, extra);
   };
   data.tasks.push(
     mk('T_A', { callMode: 'perProduct', api: { method: 'POST', path: '/a' }, inputs: [{ name: 'cf', type: 'string', required: true, source: 'cliente.codiceFiscale' }], outputs: [{ name: 'dati.codice', type: 'string' }] }),
@@ -70,8 +69,8 @@ function scenario() {
   const pid = data.products[0].id;
   const offer = {
     id: 'OFF_T', name: 'Test', description: '', products: [pid, data.products[1].id], blocks: [
-      { id: 'B_A', taskId: 'T_A', stepId: step, products: [pid, data.products[1].id], dependsOn: [], config: { callMode: 'perProduct' } },
-      { id: 'B_B', taskId: 'T_B', stepId: step, products: [pid, data.products[1].id], dependsOn: ['B_A'], config: { callMode: 'perOffer', inputMapping: { id: 'pratica.id', 'richiesta.codice': 'esiti.B_A.dati.codice', prodotti: 'offerta.prodotti', versione: 'v1.2' } } }
+      { id: 'B_A', taskId: 'T_A', products: [pid, data.products[1].id], dependsOn: [], config: { callMode: 'perProduct' } },
+      { id: 'B_B', taskId: 'T_B', products: [pid, data.products[1].id], dependsOn: ['B_A'], config: { callMode: 'perOffer', inputMapping: { id: 'pratica.id', 'richiesta.codice': 'esiti.B_A.dati.codice', prodotti: 'offerta.prodotti', versione: 'v1.2' } } }
     ], gates: []
   };
   data.offers = [offer];

@@ -38,7 +38,6 @@
       h('div', { class: 'list-head' }, h('h3', null, 'Task (' + data.tasks.length + ')'), h('button', { class: 'small', onclick: newTask }, '+ Task')),
       data.tasks.filter(match).map(function (t) {
         return item('task', t, h('span', null,
-          h('span', { class: 'badge ' + t.scope }, t.scope === 'common' ? 'common' : 'verticale'), ' ',
           h('span', { class: 'badge ' + t.type }, t.type), ' ',
           t.compatibleProducts.map(pname).join(', ')));
       })
@@ -96,8 +95,6 @@
       section('Dati generali',
         h('div', { class: 'row2' }, field('Nome', input(t, 'name', { relist: true })), field('Descrizione', input(t, 'description'))),
         h('div', { class: 'row3' },
-          field('Ambito', h('select', { value: t.scope, onchange: function (e) { t.scope = e.target.value; save(); renderLists(); } },
-            h('option', { value: 'common' }, 'Common (più prodotti)'), h('option', { value: 'vertical' }, 'Verticale (prodotto specifico)'))),
           field('Esecuzione', h('select', { value: t.type, onchange: function (e) { t.type = e.target.value; save(); render(); } },
             h('option', { value: 'sync' }, 'Sincrona (API)'), h('option', { value: 'async' }, 'Asincrona (presa in carico + callback)'))),
           field('Modalità chiamata default', h('select', { value: t.callMode, onchange: function (e) { t.callMode = e.target.value; save(); } },
@@ -109,11 +106,6 @@
         h('div', null, data.products.map(function (p) {
           return check(p.name, t.compatibleProducts.indexOf(p.id) >= 0, function (on) { toggleIn(t.compatibleProducts, p.id, on); renderLists(); });
         }))),
-      section('Step in cui può essere usato',
-        h('div', null, data.steps.map(function (s) {
-          return check(s.name, t.allowedSteps.indexOf(s.id) >= 0, function (on) { toggleIn(t.allowedSteps, s.id, on); });
-        })),
-        h('div', { class: 'field-hint' }, 'Nessuno selezionato = utilizzabile in qualsiasi step.')),
       section('Input (contratto di request)',
         listEditor(t.inputs, ['name', 'type', 'source', 'required'], { name: 'Nome (percorso)', type: 'Tipo', source: 'Sorgente di default', required: 'Obbl.' },
           function () { return { name: 'nuovoInput', type: 'string', source: '', required: false, description: '' }; }, { importFields: true }),
@@ -261,8 +253,8 @@
     if (!name) return;
     const id = Util.uniqueId(Util.slug(name), data.tasks.map(function (t) { return t.id; }));
     data.tasks.push({
-      id: id, name: name, description: '', type: 'sync', scope: 'common', callMode: 'perOffer',
-      compatibleProducts: data.products.map(function (p) { return p.id; }), allowedSteps: [],
+      id: id, name: name, description: '', type: 'sync', callMode: 'perOffer',
+      compatibleProducts: data.products.map(function (p) { return p.id; }),
       api: { method: 'POST', path: '' }, inputs: [], outputs: [], outcomes: ['OK', 'KO'],
       extensions: { request: false, ko: false }, defaults: { retry: { count: 0, intervalSec: 0 }, koQueue: '', callbackTopic: '' }
     });
@@ -294,8 +286,22 @@
       o.products = o.products.filter(function (x) { return x !== p.id; });
       o.blocks.forEach(function (b) { b.products = b.products.filter(function (x) { return x !== p.id; }); });
       const removed = o.blocks.filter(function (b) { return !b.products.length; }).map(function (b) { return b.id; });
+      // chi dipendeva da un blocco eliminato eredita le sue dipendenze: il flusso resta collegato
+      const bridge = {};
+      o.blocks.forEach(function (b) { bridge[b.id] = b.dependsOn.slice(); });
+      const resolve = function (id, seen) {
+        if (removed.indexOf(id) < 0) return [id];
+        if (seen.indexOf(id) >= 0) return [];
+        return [].concat.apply([], (bridge[id] || []).map(function (d) { return resolve(d, seen.concat(id)); }));
+      };
+      const rewire = function (x) {
+        const next = [];
+        (x.dependsOn || []).forEach(function (d) { resolve(d, []).forEach(function (r) { if (next.indexOf(r) < 0) next.push(r); }); });
+        x.dependsOn = next;
+      };
       o.blocks = o.blocks.filter(function (b) { return b.products.length; });
-      o.blocks.forEach(function (b) { b.dependsOn = b.dependsOn.filter(function (d) { return removed.indexOf(d) < 0; }); });
+      o.blocks.forEach(rewire);
+      o.gates.forEach(rewire);
       o.gates.forEach(function (g) {
         g.rules = g.rules.filter(function (r) { return !(r.type === 'DONT_WAIT' && removed.indexOf(r.blockId) >= 0); });
         g.rules.forEach(function (r) { if (r.products) r.products = r.products.filter(function (x) { return x !== p.id; }); });

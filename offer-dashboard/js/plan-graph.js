@@ -1,6 +1,6 @@
 /*
- * Grafo dell'Execution Plan (SVG, senza dipendenze): inizio → blocchi → gate → … → fine.
- * Colonne = livelli di esecuzione (i blocchi nella stessa colonna sono paralleli), il gate è un rombo,
+ * Grafo dell'Execution Plan (SVG, senza dipendenze): inizio → blocchi e gate → … → fine.
+ * Colonne = livelli di esecuzione (i nodi nella stessa colonna sono paralleli), il gate è un rombo,
  * le condizioni (SE …) e gli instradamenti (ritorni indietro, salti, stop) sono archi etichettati.
  * Legge solo l'Execution Plan.
  */
@@ -31,93 +31,80 @@
     return t;
   }
 
-  /* Costruisce nodi e archi dal piano. */
+  /* Costruisce nodi e archi dal piano: colonna = livello nel grafo delle dipendenze. */
   function buildGraph(data, plan) {
     const nodes = [], edges = [];
-    const stepsInfo = [];
-    let col = 0;
     const mk = function (n) { n.id = 'n' + nodes.length; nodes.push(n); return n; };
-    const start = mk({ kind: 'start', col: col++, w: 150, h: 40, lines: [trunc(plan.offer.name, 20), plan.products.length + ' prodotti'], products: null });
-
-    plan.steps.forEach(function (st, i) {
-      const info = { index: i, name: st.name, firstCol: col, blocks: {}, levels: [], gate: null, stop: null };
-      st.stages.forEach(function (stg, j) {
-        stg.activities.forEach(function (a) {
-          const lines = [trunc(a.taskName, 22)];
-          const tags = [];
-          if (a.products.length > 1) tags.push(a.invocation.mode === 'SINGLE_CALL_FOR_N_PRODUCTS' ? '1 chiamata × ' + a.products.length : a.products.length + ' chiamate');
-          if (a.executionType === 'ASYNC_CALLBACK') tags.push('async');
-          if (a.outcomes.KO_WITH_TASK) tags.push('KO→task');
-          lines.push(trunc(a.products.map(function (p) { return Model.productName(data, p); }).join(', '), 28));
-          if (tags.length) lines.push(trunc(tags.join(' · '), 30));
-          const title = a.taskName + '\n' + a.service.method + ' ' + a.service.path + '\nProdotti: ' + a.products.join(', ') + (a.when ? '\nSE ' + a.when.text : '');
-          const n = mk({ kind: 'block', col: col + j, w: NW, h: NH + (tags.length ? 12 : 0) + (a.when ? 15 : 0), lines: lines, cond: a.when ? trunc('SE ' + a.when.text, 32) : null, async: a.executionType === 'ASYNC_CALLBACK', products: a.products, title: title, step: st.stepId, activity: a });
-          info.blocks[a.activityId] = n;
-        });
-      });
-      const levels = st.stages.length;
-      let nextCol = col + levels;
-      if (st.exitGate) {
-        const pol = st.exitGate.effectivePolicy;
-        const stopCauses = [];
-        if (pol.stopOnKo) stopCauses.push('KO');
-        (st.exitGate.routes || []).forEach(function (r) {
-          if (r.to === 'STOP') stopCauses.push(r.condition);
-          else if (r.backward && r.onExceed === 'STOP') stopCauses.push('oltre ' + r.maxIterations + ' ritorni');
-        });
-        info.gate = mk({ kind: 'gate', col: nextCol, w: GW, h: GH, lines: ['GATE', policyTag(pol)[0]], sub: policyTag(pol).slice(1), products: null, title: 'Gate ' + st.name + ' → ' + plan.steps[i + 1].name + '\n' + pol.description.join('\n'), step: st.stepId });
-        if (stopCauses.length) info.stop = mk({ kind: 'stop', col: nextCol, w: PW, h: PH, lines: ['⛔ offerta fermata'], products: null, causes: stopCauses });
-        nextCol++;
+    const start = mk({ kind: 'start', col: 0, w: 150, h: 40, lines: [trunc(plan.offer.name, 20), plan.products.length + ' prodotti'], products: null });
+    const acts = {}, gates = {};
+    plan.activities.forEach(function (a) { acts[a.activityId] = a; });
+    plan.gates.forEach(function (g) { gates[g.gateId] = g; });
+    const depsOf = function (id) { return (acts[id] ? acts[id].dependsOn : gates[id].dependsOn).filter(function (d) { return acts[d] || gates[d]; }); };
+    const level = {};
+    const levelOf = function (id, seen) {
+      if (level[id] != null) return level[id];
+      if (seen[id]) return 0;
+      seen[id] = true;
+      const ds = depsOf(id);
+      level[id] = ds.length ? Math.max.apply(null, ds.map(function (d) { return levelOf(d, seen); })) + 1 : 0;
+      return level[id];
+    };
+    plan.order.forEach(function (id) { levelOf(id, {}); });
+    const byId = {};
+    let maxCol = 0;
+    plan.order.forEach(function (id) {
+      const col = level[id] + 1;
+      maxCol = Math.max(maxCol, col);
+      const a = acts[id];
+      if (a) {
+        const lines = [trunc(a.taskName, 22)];
+        const tags = [];
+        if (a.products.length > 1) tags.push(a.invocation.mode === 'SINGLE_CALL_FOR_N_PRODUCTS' ? '1 chiamata × ' + a.products.length : a.products.length + ' chiamate');
+        if (a.executionType === 'ASYNC_CALLBACK') tags.push('async');
+        if (a.outcomes.KO_WITH_TASK) tags.push('KO→task');
+        lines.push(trunc(a.products.map(function (p) { return Model.productName(data, p); }).join(', '), 28));
+        if (tags.length) lines.push(trunc(tags.join(' · '), 30));
+        const title = a.taskName + '\n' + a.service.method + ' ' + a.service.path + '\nProdotti: ' + a.products.join(', ') + (a.when ? '\nSE ' + a.when.text : '');
+        byId[id] = mk({ kind: 'block', col: col, w: NW, h: NH + (tags.length ? 12 : 0) + (a.when ? 15 : 0), lines: lines, cond: a.when ? trunc('SE ' + a.when.text, 32) : null, async: a.executionType === 'ASYNC_CALLBACK', products: a.products, title: title, activity: a });
+        return;
       }
-      info.lastCol = nextCol - 1;
-      col = nextCol;
-      stepsInfo.push(info);
+      const g = gates[id];
+      const pol = g.effectivePolicy;
+      const stopCauses = [];
+      if (pol.stopOnKo) stopCauses.push('KO');
+      g.routes.forEach(function (r) {
+        if (r.to === 'STOP') stopCauses.push(r.condition);
+        else if (r.backward && r.onExceed === 'STOP') stopCauses.push('oltre ' + r.maxIterations + ' ritorni');
+      });
+      byId[id] = mk({ kind: 'gate', col: col, w: GW, h: GH, lines: [g.kind === 'JOIN' ? 'GATE ⋈' : 'GATE', policyTag(pol)[0]], sub: policyTag(pol).slice(1), products: g.products, title: 'Gate ' + g.gateId + (g.note ? ' · ' + g.note : '') + '\n' + pol.description.join('\n') });
+      if (stopCauses.length) byId[id].stop = mk({ kind: 'stop', col: col, w: PW, h: PH, lines: ['⛔ offerta fermata'], products: null, causes: stopCauses });
     });
-    const end = mk({ kind: 'end', col: col, w: PW, h: PH + 6, lines: ['✔ Offerta completata'], products: null });
+    const end = mk({ kind: 'end', col: maxCol + 1, w: PW, h: PH + 6, lines: ['✔ Offerta completata'], products: null });
 
     /* ---- archi ---- */
-    const entriesOf = function (i) {
-      if (i >= stepsInfo.length) return [end];
-      const inf = stepsInfo[i];
-      const ids = Object.keys(inf.blocks);
-      if (!ids.length) return inf.gate ? [inf.gate] : entriesOf(i + 1);
-      const roots = ids.filter(function (id) { return !inf.blocks[id].activity.dependsOn.length; });
-      return (roots.length ? roots : ids).map(function (id) { return inf.blocks[id]; });
-    };
     const edge = function (from, to, kind, label, extra) { edges.push(Object.assign({ from: from, to: to, kind: kind, label: label || null }, extra || {})); };
-
-    entriesOf(0).forEach(function (n) { edge(start, n, 'flow'); });
-    plan.steps.forEach(function (st, i) {
-      const inf = stepsInfo[i];
-      const ids = Object.keys(inf.blocks);
-      const dontWait = st.exitGate ? st.exitGate.effectivePolicy.dontWait : [];
-      const hasSucc = {};
-      ids.forEach(function (id) {
-        inf.blocks[id].activity.dependsOn.forEach(function (d) { if (inf.blocks[d]) { edge(inf.blocks[d], inf.blocks[id], 'flow'); hasSucc[d] = true; } });
+    const hasSucc = {};
+    plan.order.forEach(function (id) {
+      const ds = depsOf(id);
+      if (!ds.length) edge(start, byId[id], 'flow');
+      ds.forEach(function (d) {
+        hasSucc[d] = true;
+        const wait = gates[id] && gates[id].effectivePolicy.dontWait.indexOf(d) >= 0;
+        edge(byId[d], byId[id], wait ? 'async' : 'flow', wait ? 'non attesa' : null);
       });
-      const sink = inf.gate || null;
-      ids.forEach(function (id) {
-        if (hasSucc[id]) return;
-        if (sink) edge(inf.blocks[id], sink, dontWait.indexOf(id) >= 0 ? 'async' : 'flow', dontWait.indexOf(id) >= 0 ? 'non attesa' : null);
-        else edge(inf.blocks[id], end, 'flow');
-      });
-      if (inf.gate) {
-        const next = entriesOf(i + 1);
-        next.forEach(function (n) { edge(inf.gate, n, 'flow'); });
-        if (inf.stop) edge(inf.gate, inf.stop, 'stop', trunc(inf.stop.causes.join(' / '), 30));
-        (st.exitGate.routes || []).forEach(function (r) {
-          if (r.to === 'STOP') return;
-          const di = plan.steps.findIndex(function (x) { return x.stepId === r.to; });
-          if (di < 0) return;
-          entriesOf(di).forEach(function (n, k) {
-            edge(inf.gate, n, r.backward ? 'back' : 'skip', k === 0 ? trunc(r.condition + (r.backward ? ' · max ' + r.maxIterations : ''), 40) : null, { full: r.text });
-          });
-        });
-      }
     });
-    return { nodes: nodes, edges: edges, steps: stepsInfo, cols: col + 1 };
+    plan.order.forEach(function (id) { if (!hasSucc[id]) edge(byId[id], end, 'flow'); });
+    if (!plan.order.length) edge(start, end, 'flow');
+    plan.gates.forEach(function (g) {
+      const n = byId[g.gateId];
+      if (n.stop) edge(n, n.stop, 'stop', trunc(n.stop.causes.join(' / '), 30));
+      g.routes.forEach(function (r) {
+        if (r.to === 'STOP' || !byId[r.to]) return;
+        edge(n, byId[r.to], r.backward ? 'back' : 'skip', trunc(r.condition + (r.backward ? ' · max ' + r.maxIterations : ''), 40), { full: r.text });
+      });
+    });
+    return { nodes: nodes, edges: edges, steps: [], cols: maxCol + 2 };
   }
-
   function layout(g) {
     const byCol = {};
     g.nodes.forEach(function (n) { (byCol[n.col] = byCol[n.col] || []).push(n); });
@@ -151,15 +138,7 @@
         s('path', { d: 'M0,0 L10,5 L0,10 z', fill: kinds[k].color })));
     });
 
-    const bands = s('g'), edgeLayer = s('g'), labelLayer = s('g'), nodeLayer = s('g');
-
-    // fasce degli step
-    g.steps.forEach(function (inf, i) {
-      const x1 = LEFT + inf.firstCol * (NW + CG) - CG / 2 + 4, x2 = LEFT + (inf.lastCol + 1) * (NW + CG) - CG / 2 - 4;
-      if (inf.lastCol < inf.firstCol) return;
-      bands.appendChild(s('rect', { x: x1, y: 8, width: x2 - x1, height: g.bodyBottom + 40 - 8, rx: 10, fill: C.band[i % 2], stroke: '#dde5ec' }));
-      bands.appendChild(s('text', { x: x1 + 12, y: 30, 'font-size': 13, 'font-weight': 700, fill: C.blue, 'font-family': FONT }, (i + 1) + '. ' + inf.name));
-    });
+    const edgeLayer = s('g'), labelLayer = s('g'), nodeLayer = s('g');
 
     // archi: ritorni e salti passano sotto il grafo, uno per "corsia", per non attraversare i nodi
     let lanes = 0;
@@ -240,7 +219,7 @@
     legend.appendChild(s('text', { x: lx + 28, y: ly + 4, 'font-size': 11, fill: C.text, 'font-family': FONT }, 'blocco condizionato (SE …)'));
 
     const svg = s('svg', { xmlns: SVGNS, width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, class: 'plan-graph-svg' },
-      s('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }), defs, bands, edgeLayer, labelLayer, nodeLayer, legend);
+      s('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }), defs, edgeLayer, labelLayer, nodeLayer, legend);
 
     // interazione: filtro per prodotto, evidenzia connessioni, zoom, trascinamento
     let scale = 1;

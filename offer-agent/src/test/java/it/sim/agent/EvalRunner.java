@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 /**
  * Valutazione con il modello REALE sul set di specifiche di src/test/resources/specs (da lanciare a mano, solo dopo
  * l'autorizzazione all'uso del servizio). Per ogni specifica confronta l'offerta generata con quella attesa su
- * prodotti, blocchi (step + task + prodotti), dipendenze e regole dei gate.
+ * prodotti, blocchi (task + prodotti), dipendenze e regole dei gate.
  *
  * <pre>
  * $env:GEMINI_API_KEY="..."; $env:GEMINI_MODEL="gemini-4-hydrogen"
@@ -76,29 +76,37 @@ public final class EvalRunner {
         return s;
     }
 
-    /** Blocco identificato da step, task e prodotti (gli id scelti dal modello non contano). */
+    /** Blocco identificato da task e prodotti (gli id scelti dal modello non contano). */
     static Set<String> blocks(JsonNode o) {
         Set<String> s = new TreeSet<>();
-        o.path("blocks").forEach(b -> s.add(b.path("stepId").asText() + ":" + b.path("taskId").asText() + ":" + sorted(b.path("products"))));
+        o.path("blocks").forEach(b -> s.add(b.path("taskId").asText() + ":" + sorted(b.path("products"))));
         return s;
     }
 
     static Set<String> deps(JsonNode o) {
         Set<String> s = new TreeSet<>();
-        o.path("blocks").forEach(b -> b.path("dependsOn").forEach(d -> s.add(taskOf(o, d.asText()) + "->" + b.path("taskId").asText())));
+        o.path("blocks").forEach(b -> b.path("dependsOn").forEach(d -> s.add(nodeOf(o, d.asText(), 0) + "->" + b.path("taskId").asText())));
+        o.path("gates").forEach(g -> g.path("dependsOn").forEach(d -> s.add(nodeOf(o, d.asText(), 0) + "->" + nodeOf(o, g.path("id").asText(), 0))));
         return s;
     }
 
     static Set<String> gates(JsonNode o) {
         Set<String> s = new TreeSet<>();
-        o.path("gates").forEach(g -> g.path("rules").forEach(r -> s.add(g.path("afterStep").asText() + ":" + r.path("type").asText()
-                + (r.has("blockId") ? ":" + taskOf(o, r.get("blockId").asText()) : "") + (r.has("products") ? ":" + sorted(r.get("products")) : ""))));
+        o.path("gates").forEach(g -> g.path("rules").forEach(r -> s.add(nodeOf(o, g.path("id").asText(), 0) + ":" + r.path("type").asText()
+                + (r.has("blockId") ? ":" + nodeOf(o, r.get("blockId").asText(), 0) : "") + (r.has("products") ? ":" + sorted(r.get("products")) : ""))));
         return s;
     }
 
-    private static String taskOf(JsonNode o, String blockId) {
-        for (JsonNode b : o.path("blocks")) if (b.path("id").asText().equals(blockId)) return b.path("taskId").asText();
-        return blockId + "?";
+    /** Nodo senza id: un blocco è il suo task, un gate è identificato dai nodi da cui dipende. */
+    private static String nodeOf(JsonNode o, String id, int depth) {
+        for (JsonNode b : o.path("blocks")) if (b.path("id").asText().equals(id)) return b.path("taskId").asText();
+        for (JsonNode g : o.path("gates")) {
+            if (!g.path("id").asText().equals(id)) continue;
+            Set<String> parents = new TreeSet<>();
+            if (depth < 20) g.path("dependsOn").forEach(d -> parents.add(nodeOf(o, d.asText(), depth + 1)));
+            return "gate(" + String.join(",", parents) + ")";
+        }
+        return id + "?";
     }
 
     private static String sorted(JsonNode arr) {

@@ -5,10 +5,12 @@
     "description": "Solo la parte Conto: il mutuo non è nel catalogo",
     "products": ["CONTO"],
     "blocks": [
-      { "id": "B_ORACOLO", "taskId": "ORACOLO", "stepId": "PRELIMINARI", "products": ["CONTO"], "dependsOn": [] },
-      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "stepId": "ATTIVAZIONI", "products": ["CONTO"], "dependsOn": [] }
+      { "id": "B_ORACOLO", "taskId": "ORACOLO", "products": ["CONTO"], "dependsOn": [] },
+      { "id": "B_ATTIVAZIONE", "taskId": "ATTIVAZIONE_BANCARIA", "products": ["CONTO"], "dependsOn": ["G_PRELIMINARI"] }
     ],
-    "gates": []
+    "gates": [
+      { "id": "G_PRELIMINARI", "dependsOn": ["B_ORACOLO"], "note": "", "rules": [] }
+    ]
   },
   "assumptions": [
     "Il prodotto \"Mutuo prima casa\" non è nel catalogo: escluso dall'offerta.",

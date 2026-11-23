@@ -1,0 +1,18 @@
+{
+  "name": "open-workflow-viewer-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bundle del viewer ufficiale Open Workflow (@openworkflowspec/diagram-editor) per la dashboard: script classico IIFE, utilizzabile anche da file://",
+  "type": "module",
+  "scripts": {
+    "build": "vite build && node copy-output.cjs"
+  },
+  "dependencies": {
+    "@openworkflowspec/diagram-editor": "1.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "vite": "6.4.6"
+  }
+}

@@ -10,6 +10,8 @@ client / Kafka ──start, event──▶ Temporal Server ◀──gRPC── w
                                   (stato, timer, code)        │ HTTP verso i servizi (stream 1), emit eventi
 ```
 
+> **Attenzione:** i flussi di test in `src/test/resources/flows/` sono stati generati con il modello a **step** della dashboard e provati in quella forma. La dashboard ora produce un DSL a grafo (gate come task nel ramo, `dead`, fork annidati) che **non è stato eseguito** su Temporal: da riprovare prima dell'uso.
+
 ## Come funziona
 - **Un workflow Temporal generico** (`OfferInterpreterWorkflow`) riceve `namespace`, `name`, `version` e l'input della pratica.
   - Carica la definizione con un'activity: il testo letto finisce nella storia, quindi la pratica resta legata a quella versione anche se ne viene pubblicata un'altra.

@@ -22,10 +22,6 @@ function analyzeOffer(catalogJson, offerJson) {
   return JSON.stringify(out);
 }
 
-function stepsJson() {
-  return JSON.stringify(window.SEED.steps);
-}
-
 /* Catalogo e offerte demo della dashboard (seed). */
 function seedJson() {
   return JSON.stringify(window.SEED);

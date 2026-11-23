@@ -62,20 +62,29 @@ class DslChecksTest {
     void independentBranchesAndJoinProduceValidDsl() throws Exception {
         JsonNode seed = js.seed();
         ObjectNode offer = (ObjectNode) seed.get("offers").get(0).deepCopy();
-        // Verticali: Cribis → Stampa e Pregiudizievoli → Stampa (rami indipendenti), più un join
-        for (JsonNode b : offer.withArray("blocks")) if ("B_CRIBIS".equals(b.get("id").asText())) ((ObjectNode) b).put("stepId", "VERTICALI");
+        // dopo G_PRE_1: Cribis → Stampa x2 e Pregiudizievoli → Stampa sono rami indipendenti, riuniti da G_VER_1
+        block(offer, "B_CRIBIS").putArray("dependsOn").add("G_PRE_1");
         offer.withArray("blocks")
-                .add(JSON.readTree("{\"id\":\"B_PREG2\",\"taskId\":\"PREGIUDIZIEVOLI\",\"stepId\":\"VERTICALI\",\"products\":[\"CONTO\",\"EVO\"],\"dependsOn\":[]}"))
-                .add(JSON.readTree("{\"id\":\"B_T1\",\"taskId\":\"STAMPA_CONTRATTI\",\"stepId\":\"VERTICALI\",\"products\":[\"CONTO\"],\"dependsOn\":[\"B_CRIBIS\"]}"))
-                .add(JSON.readTree("{\"id\":\"B_T2\",\"taskId\":\"STAMPA_CONTRATTI\",\"stepId\":\"VERTICALI\",\"products\":[\"CONTO\",\"EVO\"],\"dependsOn\":[\"B_PREG2\"]}"))
-                .add(JSON.readTree("{\"id\":\"B_T3\",\"taskId\":\"STAMPA_CONTRATTI\",\"stepId\":\"VERTICALI\",\"products\":[\"CONTO\"],\"dependsOn\":[\"B_CRIBIS\"]}"));
+                .add(JSON.readTree("{\"id\":\"B_PREG2\",\"taskId\":\"PREGIUDIZIEVOLI\",\"products\":[\"CONTO\",\"EVO\"],\"dependsOn\":[\"G_PRE_1\"]}"))
+                .add(JSON.readTree("{\"id\":\"B_T1\",\"taskId\":\"STAMPA_CONTRATTI\",\"products\":[\"CONTO\"],\"dependsOn\":[\"B_CRIBIS\"]}"))
+                .add(JSON.readTree("{\"id\":\"B_T2\",\"taskId\":\"STAMPA_CONTRATTI\",\"products\":[\"CONTO\",\"EVO\"],\"dependsOn\":[\"B_PREG2\"]}"))
+                .add(JSON.readTree("{\"id\":\"B_T3\",\"taskId\":\"STAMPA_CONTRATTI\",\"products\":[\"CONTO\"],\"dependsOn\":[\"B_CRIBIS\"]}"));
+        gate(offer, "G_VER_1").putArray("dependsOn").add("B_T1").add("B_T2").add("B_T3");
         JsonNode r = js.analyze(seed, offer);
         assertEquals(0, r.at("/validation/errors").size(), r.at("/validation/errors").toString());
         String main = r.at("/files/0/content").asText();
-        assertTrue(main.contains("verticali-branches") && main.contains("verticali-fork-b-cribis"), main);
+        assertTrue(main.contains("fork:") && main.contains("b-t1:") && main.contains("b-preg2:"), main);
         assertEquals(List.of(), problems(r));
 
-        ((ObjectNode) offer.withArray("blocks").get(offer.withArray("blocks").size() - 1)).putArray("dependsOn").add("B_CRIBIS").add("B_PREG2");
+        // un blocco che dipende da due rami che continuano da soli (A→C, A→D, B→D) non è esprimibile nel DSL
+        block(offer, "B_T3").putArray("dependsOn").add("B_CRIBIS").add("B_PREG2");
+        JsonNode crossing = js.analyze(seed, offer);
+        assertTrue(crossing.at("/validation/errors").toString().contains("non si possono esprimere nel DSL"), crossing.at("/validation/errors").toString());
+        assertEquals(0, crossing.get("files").size());
+
+        // ... e si risolve con un gate join da cui ripartono tutti
+        offer.withArray("gates").add(JSON.readTree("{\"id\":\"G_JOIN\",\"dependsOn\":[\"B_CRIBIS\",\"B_PREG2\"],\"note\":\"\",\"rules\":[{\"type\":\"ONLY_OK\"}]}"));
+        for (String id : List.of("B_T1", "B_T2", "B_T3")) block(offer, id).putArray("dependsOn").add("G_JOIN");
         JsonNode joined = js.analyze(seed, offer);
         assertEquals(0, joined.at("/validation/errors").size(), joined.at("/validation/errors").toString());
         assertEquals(List.of(), problems(joined));
@@ -111,7 +120,7 @@ class DslChecksTest {
         JsonNode vars = JSON.readTree("{\"workflow\":{\"input\":{\"pratica\":{\"spedizioni\":["
                 + "{\"destinatario\":{\"cap\":\"00144\"},\"colli\":[{\"peso\":1},{\"peso\":2}]},"
                 + "{\"destinatario\":{\"cap\":\"46019\"},\"colli\":[{\"peso\":3}]}]}}},"
-                + "\"context\":{\"activeProducts\":[\"CONTO\",\"EVO\",\"LIBMIN\",\"TIM\"]}}");
+                + "\"context\":{\"offerProducts\":[\"CONTO\",\"EVO\",\"LIBMIN\",\"TIM\"],\"dead\":{},\"koByBlock\":{},\"loops\":{}}}");
         java.util.Map<String, JsonNode> vs = java.util.Map.of("workflow", vars.get("workflow"), "context", vars.get("context"));
 
         JsonNode bo = call(main, "b-bo-call").at("/with/body");
@@ -166,18 +175,18 @@ class DslChecksTest {
         ((ObjectNode) block(offer, "B_WELCOME").withObject("/config")).set("when",
                 when("[{\"left\":\"offerta.prodotti\",\"op\":\"contains\",\"value\":\"CONTO\"},{\"left\":\"esiti.B_ORACOLO.esitoOracolo\",\"op\":\"!=\",\"value\":\"KO\"}]"));
 
-        // ritorno indietro con limite, salto in avanti e stop condizionale
+        // ritorno indietro con limite, salto in avanti e stop condizionale (solo da gate della sequenza principale)
         gate(offer, "G_VER_1").withArray("rules").add(JSON.readTree(
-                "{\"type\":\"ROUTE\",\"to\":\"PRELIMINARI\",\"maxIterations\":2,\"onExceed\":\"STOP\",\"when\":{\"join\":\"OR\",\"clauses\":[{\"left\":\"esito.B_CRIBIS\",\"op\":\"==\",\"value\":\"KO\"},{\"left\":\"esiti.B_ORACOLO.scoreRischio\",\"op\":\"contains\",\"value\":\"ALTO\"}]}}"));
-        gate(offer, "G_PRE_2").withArray("rules").add(JSON.readTree(
-                "{\"type\":\"ROUTE\",\"to\":\"BO\",\"maxIterations\":3,\"onExceed\":\"STOP\",\"when\":{\"join\":\"AND\",\"clauses\":[{\"left\":\"cliente.email\",\"op\":\"nexists\",\"value\":\"\"}]}}"));
+                "{\"type\":\"ROUTE\",\"to\":\"G_PRE_1\",\"maxIterations\":2,\"onExceed\":\"STOP\",\"when\":{\"join\":\"OR\",\"clauses\":[{\"left\":\"esito.B_CRIBIS\",\"op\":\"==\",\"value\":\"KO\"},{\"left\":\"esiti.B_ORACOLO.scoreRischio\",\"op\":\"contains\",\"value\":\"ALTO\"}]}}"));
+        gate(offer, "G_PRE_1").withArray("rules").add(JSON.readTree(
+                "{\"type\":\"ROUTE\",\"to\":\"B_BO\",\"maxIterations\":3,\"onExceed\":\"STOP\",\"when\":{\"join\":\"AND\",\"clauses\":[{\"left\":\"cliente.email\",\"op\":\"nexists\",\"value\":\"\"}]}}"));
         gate(offer, "G_BO_1").withArray("rules").add(JSON.readTree(
                 "{\"type\":\"ROUTE\",\"to\":\"STOP\",\"when\":{\"join\":\"AND\",\"clauses\":[{\"left\":\"cliente.documento.tipo\",\"op\":\"==\",\"value\":\"NONE\"}]}}"));
 
         JsonNode r = js.analyze(seed, offer);
         assertEquals(0, r.at("/validation/errors").size(), r.at("/validation/errors").toString());
         String main = r.at("/files/0/content").asText();
-        assertTrue(main.contains("gate-verticali-route") && main.contains("gate-verticali-go-1") && main.contains("gate-preliminari-skip"), main);
+        assertTrue(main.contains("gate-g-ver-1-route") && main.contains("gate-g-ver-1-go-1") && main.contains("gate-g-pre-1-skip"), main);
         assertEquals(List.of(), problems(r));
     }
 }

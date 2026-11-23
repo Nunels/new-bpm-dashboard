@@ -62,11 +62,6 @@ public class DashboardJs {
         return read(fn.execute(catalog.toString(), offer.toString()).asString());
     }
 
-    /** Step fissi del processo (dal seed della dashboard). */
-    public synchronized JsonNode steps() {
-        return read(context.getBindings("js").getMember("stepsJson").execute().asString());
-    }
-
     /** Catalogo e offerte demo della dashboard. */
     public synchronized JsonNode seed() {
         return read(context.getBindings("js").getMember("seedJson").execute().asString());

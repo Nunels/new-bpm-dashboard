@@ -99,8 +99,7 @@ public class GenerationService {
     static final String FIXABLE = "input obbligatorio";
 
     void run(GenerationJob job, String spec, JsonNode catalog) {
-        JsonNode steps = js.steps();
-        OfferSchema schema = OfferSchema.forCatalog(catalog, steps);
+        OfferSchema schema = OfferSchema.forCatalog(catalog);
         String previous = null;
         List<String> errors = List.of();
         Outcome fallback = null;           // ultima risposta valida con avvisi correggibili: se le correzioni peggiorano, si usa questa
@@ -111,8 +110,8 @@ public class GenerationService {
             a.kind = previous == null ? "GENERATION" : "REPAIR";
             long t0 = System.currentTimeMillis();
             job.progress = "Tentativo " + n + " di " + maxAttempts + ": " + (previous == null ? "generazione" : "correzione degli errori");
-            String prompt = previous == null ? PromptBuilder.generation(catalog, steps, job.fileName, spec)
-                    : PromptBuilder.repair(catalog, steps, job.fileName, spec, previous, errors);
+            String prompt = previous == null ?             PromptBuilder.generation(catalog, job.fileName, spec)
+                                : PromptBuilder.repair(catalog, job.fileName, spec, previous, errors);
             String response;
             try {
                 response = call(prompt, schema);
@@ -389,12 +388,12 @@ public class GenerationService {
         return out;
     }
 
-    /** Id duplicati di blocchi e barre: la validazione della dashboard li presuppone univoci. */
+    /** Id duplicati di blocchi e gate (stesso spazio di nomi: dependsOn li referenzia entrambi): la validazione della dashboard li presuppone univoci. */
     private static List<String> duplicates(JsonNode offer) {
         List<String> out = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        offer.path("blocks").forEach(b -> { if (!seen.add("B:" + b.path("id").asText())) out.add("Id di blocco duplicato: " + b.path("id").asText()); });
-        offer.path("gates").forEach(g -> { if (!seen.add("G:" + g.path("id").asText())) out.add("Id di barra duplicato: " + g.path("id").asText()); });
+        offer.path("blocks").forEach(b -> { if (!seen.add(b.path("id").asText())) out.add("Id di blocco duplicato: " + b.path("id").asText()); });
+        offer.path("gates").forEach(g -> { if (!seen.add(g.path("id").asText())) out.add("Id di barra duplicato: " + g.path("id").asText()); });
         return out;
     }
 

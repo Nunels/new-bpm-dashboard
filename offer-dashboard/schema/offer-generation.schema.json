@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.com/offer-process-designer/offer-generation.schema.json",
   "title": "Risposta dell'agente: configurazione di un'offerta",
-  "description": "Configurazione di un'offerta nel formato della dashboard BPM AI Offer Designer. Gli elenchi ammessi di prodotti, task e step vengono iniettati dal backend a partire dal catalogo.",
+  "description": "Configurazione di un'offerta nel formato della dashboard BPM AI Offer Designer. Gli elenchi ammessi di prodotti e task vengono iniettati dal backend a partire dal catalogo.",
   "type": "object",
   "required": ["offer", "assumptions"],
   "additionalProperties": false,
@@ -22,17 +22,16 @@
         },
         "blocks": {
           "type": "array",
-          "description": "Attività del processo. Un blocco esegue un task del catalogo in uno step, per uno o più prodotti.",
+          "description": "Attività del processo. Un blocco esegue un task del catalogo per uno o più prodotti; l'ordine di esecuzione è dato da dependsOn (grafo senza step fissi).",
           "items": {
             "type": "object",
-            "required": ["id", "taskId", "stepId", "products", "dependsOn"],
+            "required": ["id", "taskId", "products", "dependsOn"],
             "additionalProperties": false,
             "properties": {
               "id": { "type": "string", "pattern": "^B_[A-Z0-9_]{1,40}$", "description": "Identificativo univoco del blocco, es. B_ORACOLO." },
               "taskId": { "type": "string", "description": "Id del task nel catalogo." },
-              "stepId": { "type": "string", "description": "Step in cui il blocco viene eseguito." },
               "products": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" }, "description": "Prodotti per cui il blocco viene eseguito: devono essere nell'offerta e compatibili con il task." },
-              "dependsOn": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "Id di blocchi dello STESSO step che devono concludersi prima. Vuoto = in parallelo." },
+              "dependsOn": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "Id di blocchi o gate che devono concludersi prima. Vuoto = il blocco parte subito, in parallelo agli altri nodi senza dipendenze. Due blocchi con le stesse dipendenze sono rami paralleli; un blocco o gate con più dipendenze è un join." },
               "config": {
                 "type": "object",
                 "additionalProperties": false,
@@ -70,14 +69,14 @@
         },
         "gates": {
           "type": "array",
-          "description": "Regole di passaggio (barre arancioni) all'uscita di uno step. Senza regole sui KO vale 'Manda solo gli OK'.",
+          "description": "Gate: mattoncini opzionali del grafo con regole di passaggio. Con più dependsOn riuniscono i rami (join), con uno solo valgono per quel ramo. Senza gate un KO arriva solo ai nodi che dipendono dal blocco KO; un gate senza regole sui KO vale 'Manda solo gli OK'.",
           "items": {
             "type": "object",
-            "required": ["id", "afterStep", "rules"],
+            "required": ["id", "dependsOn", "rules"],
             "additionalProperties": false,
             "properties": {
               "id": { "type": "string", "pattern": "^G_[A-Z0-9_]{1,40}$" },
-              "afterStep": { "type": "string", "description": "Step dopo il quale si applica la barra (non l'ultimo step)." },
+              "dependsOn": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" }, "description": "Id di blocchi o gate che il gate attende: un solo nodo = gate di un ramo; più nodi = join." },
               "note": { "type": "string", "description": "Motivazione, citando il requisito." },
               "rules": {
                 "type": "array",
@@ -87,7 +86,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "type": { "type": "string", "enum": ["DONT_WAIT", "ONLY_OK", "STOP_ON_KO", "CONTINUE_ON_KO"] },
-                    "blockId": { "type": "string", "description": "Solo per DONT_WAIT: blocco dello stesso step da non attendere." },
+                    "blockId": { "type": "string", "description": "Solo per DONT_WAIT: blocco da non attendere, tra quelli in dependsOn del gate e senza altri nodi che dipendono da lui." },
                     "products": { "type": "array", "items": { "type": "string" }, "description": "Solo per STOP_ON_KO: limita la regola a questi prodotti; vuoto = qualsiasi prodotto." }
                   }
                 }

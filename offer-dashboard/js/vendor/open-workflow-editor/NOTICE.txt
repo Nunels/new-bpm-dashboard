@@ -1,0 +1,20 @@
+Bundle generato da tools/open-workflow-viewer (npm run build). Non modificare a mano.
+
+Contiene @openworkflowspec/diagram-editor (Apache-2.0, https://github.com/open-workflow-specification/editor) e le sue dipendenze.
+Librerie principali incluse (licenza dichiarata nel package.json):
+- @openworkflowspec/diagram-editor 1.1.0 — Apache-2.0
+- @openworkflowspec/i18n 1.1.0 — Apache-2.0
+- @openworkflowspec/sdk 1.0.3-alpha8 — Apache-2.0
+- @xyflow/react 12.12.1 — MIT
+- class-variance-authority 0.7.1 — Apache-2.0
+- clsx 2.1.1 — MIT
+- elkjs 0.12.1 — EPL-2.0 OR GPL-3.0-or-later
+- js-yaml 5.5.0 — MIT
+- radix-ui 1.8.1 — MIT
+- react 19.3.1 — MIT
+- react-dom 19.3.1 — MIT
+- sonner 2.0.8 — MIT
+- use-sync-external-store 1.7.0 — MIT
+
+elkjs è doppia licenza EPL-2.0 OR GPL-3.0-or-later: viene usato sotto la Eclipse Public License 2.0 (come indicato dal README del pacchetto).
+Le licenze delle dipendenze transitive sono nel pacchetto npm corrispondente (vedi package-lock.json).

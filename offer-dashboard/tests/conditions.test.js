@@ -57,19 +57,20 @@ test('when su blocco per prodotto: simulatore e DSL (if dentro il for)', functio
   assert.equal(Validation.validateOffer(s.data, s.offer).errors.length, 0);
 
   const skipped = Simulator.run(s.data, s.offer, {}, { practice: { cliente: { documento: { tipo: 'PASS' } } } });
-  assert.equal(skipped.steps.find(function (x) { return x.stepId === 'VERTICALI'; }).blockResults.B_CRIBIS.CONTO, 'SKIPPED_BY_CONDITION');
+  assert.equal(skipped.blocks.B_CRIBIS.results.CONTO, 'SKIPPED_BY_CONDITION');
   assert.equal(skipped.final.status, 'COMPLETED', 'un blocco saltato per condizione non è un KO');
   const ran = Simulator.run(s.data, s.offer, { B_CRIBIS: { CONTO: 'KO' } }, { practice: { cliente: { documento: { tipo: 'CI' } } } });
-  assert.equal(ran.steps.find(function (x) { return x.stepId === 'VERTICALI'; }).blockResults.B_CRIBIS.CONTO, 'KO');
+  assert.equal(ran.blocks.B_CRIBIS.results.CONTO, 'KO');
 
   const main = dslOf(s).main;
-  const step = main.do.find(function (t) { return t['step-verticali']; })['step-verticali'].do;
-  const unit = step.find(function (t) { return t['b-cribis'] || t['b_cribis'] || Object.keys(t)[0].indexOf('cribis') >= 0; });
-  const task = unit[Object.keys(unit)[0]];
-  assert.ok(task.for, 'blocco per prodotto = for');
-  const inner = task.do[0][Object.keys(task.do[0])[0]];
+  const unit = main.do.find(function (t) { return t['b-cribis']; })['b-cribis'];
+  const run = unit.do[0]['b-cribis-run'];
+  assert.ok(run.for, 'blocco per prodotto = for');
+  const inner = run.do[0][Object.keys(run.do[0])[0]];
   assert.match(inner.if, /\$workflow\.input\.cliente\.documento\.tipo == "CI"/);
   assert.ok(Array.isArray(inner.do) && inner.do.length >= 1);
+  // anche saltato, il blocco registra i prodotti esclusi a monte: i nodi successivi li ereditano
+  assert.ok(unit.do[1]['b-cribis-settle'].export.as.indexOf('"B_CRIBIS"') > 0);
 });
 
 test('when su blocco per offerta: esito di un blocco precedente e prodotti presenti', function () {
@@ -81,22 +82,22 @@ test('when su blocco per offerta: esito di un blocco precedente e prodotti prese
   const text = JSON.stringify(main);
   assert.ok(text.includes('koByBlock[\\"B_CRIBIS\\"]'));
   const sim = Simulator.run(s.data, s.offer, {}, {});
-  assert.equal(sim.steps.find(function (x) { return x.stepId === 'POST_ATTIVAZIONI'; }).blockResults.B_WELCOME.CONTO, 'SKIPPED_BY_CONDITION', 'nessun KO in Cribis: la condizione non è soddisfatta');
+  assert.equal(sim.blocks.B_WELCOME.results.CONTO, 'SKIPPED_BY_CONDITION', 'nessun KO in Cribis: la condizione non è soddisfatta');
   w.config.when.clauses[0].value = 'OK';
   const ran = Simulator.run(s.data, s.offer, {}, {});
-  assert.equal(ran.steps.find(function (x) { return x.stepId === 'POST_ATTIVAZIONI'; }).blockResults.B_WELCOME.CONTO, 'OK');
+  assert.equal(ran.blocks.B_WELCOME.results.CONTO, 'OK');
 });
 
 test('ROUTE all\'indietro: contatore, limite e DSL con destinazioni fratelle', function () {
   const s = setup();
-  s.gate('G_VER_1').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [cl('esito.B_CRIBIS', '==', 'KO')] }, to: 'PRELIMINARI', maxIterations: 2, onExceed: 'STOP' });
+  s.gate('G_VER_1').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [cl('esito.B_CRIBIS', '==', 'KO')] }, to: 'B_CRIBIS', maxIterations: 2, onExceed: 'STOP' });
   const v = Validation.validateOffer(s.data, s.offer);
   assert.equal(v.errors.length, 0, JSON.stringify(v.errors));
 
   const stop = Simulator.run(s.data, s.offer, { B_CRIBIS: { CONTO: 'KO' } }, {});
   assert.equal(stop.final.status, 'STOPPED');
   assert.equal(stop.routes.length, 2, 'due ritorni e poi stop');
-  assert.equal(stop.steps.filter(function (x) { return x.stepId === 'PRELIMINARI'; }).length, 3);
+  assert.equal(stop.blocks.B_CRIBIS.passes, 3);
 
   const fixed = Simulator.run(s.data, s.offer, { B_CRIBIS: { CONTO: 'KO' } }, {}, { recoverAfterLoop: true });
   assert.equal(fixed.final.status, 'COMPLETED');
@@ -108,13 +109,15 @@ test('ROUTE all\'indietro: contatore, limite e DSL con destinazioni fratelle', f
   const main = dslOf(s).main;
   assertThens(main.do, '/do');
   const names = main.do.map(function (t) { return Object.keys(t)[0]; });
-  assert.ok(names.indexOf('gate-verticali-route') >= 0 && names.indexOf('gate-verticali-route') < names.indexOf('gate-verticali'), 'il ritorno si valuta prima delle regole del gate');
-  const go = names.indexOf('gate-verticali-go-1');
+  assert.ok(names.indexOf('gate-g-ver-1-route') >= 0 && names.indexOf('gate-g-ver-1-route') < names.indexOf('gate-g-ver-1-apply'), 'il ritorno si valuta prima delle regole del gate');
+  const go = names.indexOf('gate-g-ver-1-go-1');
   assert.ok(go > names.indexOf('offer-completed') && go > names.indexOf('offer-stopped'), 'il task di ritorno sta in fondo, dopo i terminali');
-  const sw = main.do[names.indexOf('gate-verticali-route')]['gate-verticali-route'].switch;
+  const sw = main.do[names.indexOf('gate-g-ver-1-route')]['gate-g-ver-1-route'].switch;
   assert.match(sw[0]['route-1'].when, /\(\$context\.loops \/\/ \{\}\)\["G_VER_1-1"\] \/\/ 0\) < 2/);
-  assert.equal(sw[0]['route-1'].then, 'gate-verticali-go-1');
-  assert.ok(main.do[go]['gate-verticali-go-1'].then === 'step-preliminari');
+  assert.equal(sw[0]['route-1'].then, 'gate-g-ver-1-go-1');
+  assert.equal(main.do[go]['gate-g-ver-1-go-1'].then, 'b-cribis');
+  // il ritorno azzera i KO dei nodi che verranno rieseguiti
+  assert.match(main.do[go]['gate-g-ver-1-go-1'].export.as, /dead: .*"B_CRIBIS"/);
   // il YAML prodotto si rilegge e mantiene le destinazioni valide
   const reread = ctx.jsyaml.load(Exporters.toYaml(main));
   assertThens(reread.do, '/do');
@@ -122,12 +125,12 @@ test('ROUTE all\'indietro: contatore, limite e DSL con destinazioni fratelle', f
 
 test('ROUTE in avanti e verso STOP', function () {
   const s = setup();
-  s.gate('G_PRE_2').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [cl('cliente.documento.tipo', '==', 'PASS')] }, to: 'BO', maxIterations: 3, onExceed: 'STOP' });
+  s.gate('G_PRE_1').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [cl('cliente.documento.tipo', '==', 'PASS')] }, to: 'B_BO', maxIterations: 3, onExceed: 'STOP' });
   s.gate('G_BO_1').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [cl('cliente.email', 'nexists', '')] }, to: 'STOP' });
   assert.equal(Validation.validateOffer(s.data, s.offer).errors.length, 0, JSON.stringify(Validation.validateOffer(s.data, s.offer).errors));
 
   const sim = Simulator.run(s.data, s.offer, {}, { practice: { cliente: { documento: { tipo: 'PASS' }, email: 'a@b.it' } } });
-  assert.equal(sim.steps.find(function (x) { return x.stepId === 'VERTICALI'; }).skipped, true);
+  assert.equal(sim.blocks.B_CRIBIS.skipped, true);
   assert.equal(sim.routes[0].kind, 'skip');
   assert.equal(sim.final.status, 'COMPLETED');
   const stopped = Simulator.run(s.data, s.offer, {}, { practice: { cliente: { documento: { tipo: 'CI' } } } });
@@ -136,14 +139,17 @@ test('ROUTE in avanti e verso STOP', function () {
   const main = dslOf(s).main;
   assertThens(main.do, '/do');
   const names = main.do.map(function (t) { return Object.keys(t)[0]; });
-  assert.ok(names.indexOf('gate-preliminari-skip') > names.indexOf('gate-preliminari-apply'), 'il salto in avanti segue la politica KO');
-  assert.equal(main.do[names.indexOf('gate-preliminari-skip')]['gate-preliminari-skip'].switch[0]['route-1'].then, 'step-bo');
+  assert.ok(names.indexOf('gate-g-pre-1-skip') > names.indexOf('gate-g-pre-1-apply'), 'il salto in avanti segue la politica KO');
+  assert.equal(main.do[names.indexOf('gate-g-pre-1-skip')]['gate-g-pre-1-skip'].switch[0]['route-1'].then, 'gate-g-pre-1-skip-go-1');
+  const go = main.do[names.indexOf('gate-g-pre-1-skip-go-1')]['gate-g-pre-1-skip-go-1'];
+  assert.equal(go.then, 'b-bo');
+  assert.match(go.export.as, /"B_CRIBIS": \(\$context\.dead\["G_PRE_1"\]/, 'i nodi saltati lasciano passare i prodotti del gate');
   assert.ok(names.indexOf('offer-stopped') >= 0);
 });
 
 test('validazione: condizioni e instradamenti incoerenti', function () {
   const s = setup();
-  s.block('B_ORACOLO').config.when = { join: 'AND', clauses: [cl('esito.B_CRIBIS', '==', 'OK')] };       // B_CRIBIS è in uno step successivo
+  s.block('B_ORACOLO').config.when = { join: 'AND', clauses: [cl('esito.B_CRIBIS', '==', 'OK')] };       // B_CRIBIS viene dopo
   s.block('B_BO').config.when = { join: 'AND', clauses: [cl('prodotto.id', '==', 'CONTO')] };            // blocco "per offerta"
   s.block('B_CRIBIS').config.when = { join: 'AND', clauses: [cl('cliente.documento.tipo', '==', '')] };   // valore mancante
   s.gate('G_VER_1').rules.push({ type: 'ROUTE', when: { join: 'AND', clauses: [] }, to: 'NOPE', maxIterations: 50, onExceed: 'STOP' });
@@ -152,6 +158,6 @@ test('validazione: condizioni e instradamenti incoerenti', function () {
   assert.match(msgs, /"prodotto\.id" esiste solo/);
   assert.match(msgs, /valore mancante/);
   assert.match(msgs, /condizione vuota/);
-  assert.match(msgs, /destinazione "NOPE" non esiste/);
+  assert.match(msgs, /la destinazione "NOPE" non esiste/);
   assert.match(msgs, /tra 1 e 10/);
 });

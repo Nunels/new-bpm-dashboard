@@ -164,13 +164,11 @@
   }
 
   /* ---------------- riferimenti proponibili ---------------- */
-  function stepIdx(data, id) { return data.steps.findIndex(function (s) { return s.id === id; }); }
-
-  /* Blocchi già eseguiti: per un blocco i suoi predecessori; per un gate (ctx.stepId) tutti i blocchi fino a quello step. */
+  /* Blocchi già eseguiti: per un blocco i suoi antenati; per un gate (ctx.gate) i blocchi a monte del gate. */
   function producers(data, offer, ctx) {
     if (ctx.block) return global.Fields.producersFor(data, offer, ctx.block);
-    const last = stepIdx(data, ctx.stepId);
-    return offer.blocks.filter(function (b) { return stepIdx(data, b.stepId) <= last; });
+    const anc = global.Model.ancestors(offer, ctx.gate);
+    return offer.blocks.filter(function (b) { return anc.indexOf(b.id) >= 0; });
   }
 
   function references(data, offer, ctx) {
@@ -194,7 +192,7 @@
   }
 
   /* ---------------- validazione ---------------- */
-  /* ctx = { block } per un blocco, { stepId } per un gate. Ritorna [{ level: 'error'|'warn', msg }]. */
+  /* ctx = { block } per un blocco, { gate: id } per un gate. Ritorna [{ level: 'error'|'warn', msg }]. */
   function check(data, offer, when, ctx, opts) {
     opts = opts || {};
     const out = [];
@@ -215,7 +213,7 @@
         const src = global.Fields.resolveBlock(offer, k.ref);
         if (!src) { add('error', tag + ': il blocco "' + k.ref + '" non è nell\'offerta'); return; }
         if (ctx.block && src.id === ctx.block.id) { add('error', tag + ': un blocco non può leggere il proprio esito/output'); return; }
-        if (!before.some(function (b) { return b.id === src.id; })) { add('error', tag + ': il blocco "' + src.id + '" non è eseguito prima ' + (ctx.block ? 'di questo (serve uno step precedente o "Esegui dopo")' : 'di questo gate')); return; }
+        if (!before.some(function (b) { return b.id === src.id; })) { add('error', tag + ': il blocco "' + src.id + '" non è eseguito prima ' + (ctx.block ? 'di questo (serve "Esegui dopo", anche indiretto)' : 'di questo gate')); return; }
         if (k.kind === 'result') {
           const t = data.tasks.find(function (x) { return x.id === src.taskId; });
           if (t && (t.outputs || []).length && !global.Fields.pathExists(t.outputs, k.field)) add('warn', tag + ': l\'output "' + k.field + '" non è definito nel task ' + src.taskId);
